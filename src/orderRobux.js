@@ -1441,6 +1441,20 @@ async function runAutoCloseSweep(client) {
 
 let client;
 
+async function upsertGuildCommands(guild, commands) {
+  const existing = await guild.commands.fetch();
+
+  for (const commandData of commands) {
+    const found = existing.find((cmd) => cmd.name === commandData.name);
+
+    if (found) {
+      await guild.commands.edit(found.id, commandData);
+    } else {
+      await guild.commands.create(commandData);
+    }
+  }
+}
+
 export function setupOrderRobux(discordClient) {
   client = discordClient;
   loadOrders();
@@ -1453,7 +1467,7 @@ export function setupOrderRobux(discordClient) {
 
     const guild = await client.guilds.fetch(GUILD_ID);
 
-    await guild.commands.set([
+    await upsertGuildCommands(guild, [
       new SlashCommandBuilder()
         .setName("proses")
         .setDescription("Staff: proses order")

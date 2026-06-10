@@ -55,3 +55,24 @@ assets/fonts/Poppins-Bold.ttf
 ## Security
 
 Jangan upload `.env` ke GitHub publik. Pakai `.env.example` untuk template, lalu isi secret di Railway Variables.
+
+
+## Fashion Show System
+
+Tambahan modul: `src/fashionShow.js`.
+
+Env baru yang wajib diisi:
+
+```env
+DAFTAR_CHANNEL_ID="channel_daftar_fashion_show"
+PESERTA_CHANNEL_ID="channel_peserta_fashion_show"
+OWNER_USER_ID="user_id_owner"
+```
+
+Slash command Fashion Show:
+
+- `/delete` hapus 1 peserta
+- `/deleteall` hapus semua peserta
+- `/setkuota` ubah kuota
+- `/openfs` buka pendaftaran
+- `/closefs` tutup pendaftaran
