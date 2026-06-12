@@ -6,6 +6,7 @@ import {
   ChannelType,
   Client,
   GatewayIntentBits,
+  EmbedBuilder,
 } from "discord.js";
 import { createCanvas, loadImage, GlobalFonts } from "@napi-rs/canvas";
 
@@ -37,6 +38,7 @@ const GOODBYE_CHANNEL_ID = process.env.GOODBYE_CHANNEL_ID;
 const ORDER_CHANNEL_ID = process.env.ORDER_CHANNEL_ID;
 const MAP_CHANNEL_ID = process.env.MAP_CHANNEL_ID;
 const COMMUNITY_CHANNEL_ID = process.env.COMMUNITY_CHANNEL_ID;
+const RULES_CHANNEL_ID = process.env.RULES_CHANNEL_ID;
 
 const SERVER_NAME = process.env.SERVER_NAME || "UNDERCOVER";
 
@@ -51,7 +53,6 @@ const GOODBYE_BG_URL =
 if (!DISCORD_TOKEN) throw new Error("Missing DISCORD_TOKEN");
 if (!WELCOME_CHANNEL_ID) throw new Error("Missing WELCOME_CHANNEL_ID");
 if (!GOODBYE_CHANNEL_ID) throw new Error("Missing GOODBYE_CHANNEL_ID");
-if (!ORDER_CHANNEL_ID) throw new Error("Missing ORDER_CHANNEL_ID");
 if (!MAP_CHANNEL_ID) throw new Error("Missing MAP_CHANNEL_ID");
 if (!COMMUNITY_CHANNEL_ID) throw new Error("Missing COMMUNITY_CHANNEL_ID");
 
@@ -334,11 +335,26 @@ async function createCard({ username, avatarUrl, mode = "welcome" }) {
   return canvas.encode("png");
 }
 
+function getRulesChannelMention(guild) {
+  if (RULES_CHANNEL_ID) return `<#${RULES_CHANNEL_ID}>`;
+
+  const cachedRulesChannel = guild?.channels?.cache?.find(
+    (channel) =>
+      (channel.type === ChannelType.GuildText ||
+        channel.type === ChannelType.GuildAnnouncement) &&
+      channel.name?.toLowerCase() === "rules-server"
+  );
+
+  return cachedRulesChannel ? `<#${cachedRulesChannel.id}>` : "#rules-server";
+}
+
 function buildWelcomeMessage(member) {
+  const rulesChannel = getRulesChannelMention(member.guild);
+
   return [
     `🎉 **Selamat datang di ${SERVER_NAME}** ${member}`,
     "",
-    `1️⃣ Order Robux di <#${ORDER_CHANNEL_ID}>`,
+    `1️⃣ Wajib baca rules di ${rulesChannel}`,
     `2️⃣ Join Map di <#${MAP_CHANNEL_ID}>`,
     `3️⃣ Join Komunitas di <#${COMMUNITY_CHANNEL_ID}>`,
     "",
@@ -349,11 +365,146 @@ function buildGoodbyeMessage(user) {
   return [
     `😢 **Selamat tinggal dari ${SERVER_NAME}** <@${user.id}>`,
     "",
-    `1️⃣ Kalau mau balik lagi, cek <#${ORDER_CHANNEL_ID}>`,
-    `2️⃣ Main bareng lagi di <#${MAP_CHANNEL_ID}>`,
-    `3️⃣ Join lagi komunitas di <#${COMMUNITY_CHANNEL_ID}>`,
+    `1️⃣ Terima kasih sudah pernah jadi bagian dari ${SERVER_NAME}`,
+    `2️⃣ Semoga next time bisa main bareng lagi di <#${MAP_CHANNEL_ID}>`,
+    `3️⃣ Komunitas tetap terbuka di <#${COMMUNITY_CHANNEL_ID}>`,
     "",
   ].join("\n");
+}
+
+async function resolveRulesChannel(guild) {
+  if (RULES_CHANNEL_ID) {
+    return await client.channels.fetch(RULES_CHANNEL_ID).catch((error) => {
+      console.warn("Failed to fetch RULES_CHANNEL_ID:", error?.message || error);
+      return null;
+    });
+  }
+
+  await guild.channels.fetch().catch((error) => {
+    console.warn("Failed to fetch guild channels for rules-server:", error?.message || error);
+  });
+
+  return (
+    guild.channels.cache.find(
+      (channel) =>
+        (channel.type === ChannelType.GuildText ||
+          channel.type === ChannelType.GuildAnnouncement) &&
+        channel.name?.toLowerCase() === "rules-server"
+    ) || null
+  );
+}
+
+function buildRulesEmbed(guild) {
+  const iconURL = guild?.iconURL({ extension: "png", size: 256 });
+
+  const embed = new EmbedBuilder()
+    .setColor(0xffd000)
+    .setAuthor({
+      name: `${SERVER_NAME} • RULES SERVER`,
+      iconURL: iconURL || undefined,
+    })
+    .setTitle("📌 RULES SERVER — WAJIB DIBACA")
+    .setDescription(
+      [
+        `Selamat datang di server discord **${SERVER_NAME}**.`,
+        "Server ini dibuat untuk tempat ngobrol, main bareng, dan bangun circle yang rapi. Supaya suasana tetap aman, nyaman, dan tidak berantakan, semua member wajib patuh rules di bawah ini.",
+      ].join("\n\n")
+    )
+    .addFields(
+      {
+        name: "1️⃣ Jaga Sikap & Saling Respect",
+        value:
+          "Dilarang toxic berlebihan, menghina, memancing ribut, rasis, atau menyerang member lain. Bercanda boleh, tapi tetap tahu batas.",
+      },
+      {
+        name: "2️⃣ Gunakan Channel Sesuai Fungsi",
+        value:
+          "Chat, tanya jawab, laporan, dan aktivitas lain wajib ditempatkan di channel yang sesuai. Jangan membuat obrolan penting tenggelam di channel yang salah.",
+      },
+      {
+        name: "3️⃣ Dilarang Spam & Tag Sembarangan",
+        value:
+          "Jangan spam pesan, emoji, sticker, link, atau mention member/admin tanpa alasan jelas. Tag massal seperti @everyone hanya untuk kebutuhan penting dari admin.",
+      },
+      {
+        name: "4️⃣ Konten Harus Aman & Sopan",
+        value:
+          "Dilarang kirim konten NSFW, gore, disturbing, ujaran kebencian, atau hal lain yang bisa membuat server tidak nyaman.",
+      },
+      {
+        name: "5️⃣ Privasi Wajib Dijaga",
+        value:
+          "Jangan menyebarkan data pribadi, chat pribadi, foto, nomor, alamat, akun, atau informasi sensitif milik orang lain tanpa izin.",
+      },
+      {
+        name: "6️⃣ Dilarang Jualan Tanpa Izin Owner",
+        value:
+          "Tidak boleh promosi, sebar link, open jasa, menawarkan produk, atau jualan apapun di channel mana pun tanpa izin owner. **Nekat jualan tanpa izin owner = BAN dari server.**",
+      },
+      {
+        name: "7️⃣ Ikuti Arahan Admin",
+        value:
+          "Jika admin menegur, mengarahkan, atau meminta member berhenti melakukan sesuatu, wajib diikuti. Melawan hanya akan memperberat hukuman.",
+      },
+      {
+        name: "8️⃣ Keputusan Owner/Admin Bersifat Final",
+        value:
+          "Pelanggaran bisa berujung warn, mute, kick, atau ban tergantung tingkat kesalahan. Untuk pelanggaran berat, tindakan bisa langsung diberikan tanpa peringatan.",
+      }
+    )
+    .setFooter({ text: `${SERVER_NAME} • Rules resmi server` })
+    .setTimestamp();
+
+  if (iconURL) embed.setThumbnail(iconURL);
+
+  return embed;
+}
+
+async function syncRulesEmbed(guild) {
+  const channel = await resolveRulesChannel(guild);
+
+  if (!channel) {
+    console.warn(
+      "Rules channel not found. Set RULES_CHANNEL_ID in .env or create a channel named rules-server."
+    );
+    return;
+  }
+
+  if (
+    channel.type !== ChannelType.GuildText &&
+    channel.type !== ChannelType.GuildAnnouncement
+  ) {
+    console.warn(`Invalid rules channel type for ${channel.id}: ${channel.type}`);
+    return;
+  }
+
+  const permissions = channel.permissionsFor(client.user);
+  if (!permissions?.has("ViewChannel") || !permissions?.has("SendMessages")) {
+    console.warn(`Missing permission to send rules embed in ${channel.id}`);
+    return;
+  }
+
+  const payload = {
+    content:
+      "📌 **Rules resmi server sudah di-update. Baca sampai paham sebelum lanjut aktif di server.**",
+    embeds: [buildRulesEmbed(guild)],
+  };
+
+  const recentMessages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
+  const oldRulesMessage = recentMessages?.find(
+    (message) =>
+      message.author?.id === client.user.id &&
+      message.embeds?.[0]?.title === "📌 RULES SERVER — WAJIB DIBACA"
+  );
+
+  if (oldRulesMessage) {
+    await oldRulesMessage.edit(payload);
+    console.log(`Rules embed updated in #${channel.name}`);
+    return;
+  }
+
+  await channel.send(payload);
+  console.log(`Rules embed sent in #${channel.name}`);
 }
 
 async function sendCard({ channelId, content, username, avatarUrl, mode }) {
@@ -406,9 +557,15 @@ async function sendCard({ channelId, content, username, avatarUrl, mode }) {
 
 export function setupWelcomeGoodbye(discordClient) {
   client = discordClient;
-  client.once("ready", () => {
+  client.once("ready", async () => {
     console.log("INDEX.JS VERSI BARU KELOAD");
     console.log(`Logged in as ${client.user.tag}`);
+
+    for (const guild of client.guilds.cache.values()) {
+      await syncRulesEmbed(guild).catch((error) => {
+        console.error("syncRulesEmbed error:", error);
+      });
+    }
   });
 
   client.on("guildMemberAdd", async (member) => {
