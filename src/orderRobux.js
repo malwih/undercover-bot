@@ -28,6 +28,11 @@ const UPDATE_STOCK_CHANNEL_ID = process.env.UPDATE_STOCK_CHANNEL_ID;
 const TESTIMONI_CHANNEL_ID = process.env.TESTIMONI_CHANNEL_ID;
 const TICKET_CATEGORY_ID = process.env.TICKET_CATEGORY_ID;
 const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID;
+const VVIP_ROLE_ID = process.env.VVIP_ROLE_ID || "";
+const VVIP_ROLE_NAME = process.env.VVIP_ROLE_NAME || "VVIP";
+const EXECUTIVE_ROLE_ID = process.env.EXECUTIVE_ROLE_ID || "";
+const EXECUTIVE_ROLE_NAME = process.env.EXECUTIVE_ROLE_NAME || "EXECUTIVE";
+const EXECUTIVE_MIN_ORDER_QTY = Number(process.env.EXECUTIVE_MIN_ORDER_QTY || 5000);
 
 const ROBLOX_API_KEY = process.env.ROBLOX_API_KEY;
 const ROBLOX_GROUP_ID = 819348691;
@@ -298,6 +303,60 @@ function nowIso() {
 
 function isStaff(member) {
   return member?.roles?.cache?.has(STAFF_ROLE_ID);
+}
+
+function normalizeDiscordRoleName(name) {
+  return String(name || "").trim().toLowerCase();
+}
+
+async function resolveDiscordRole(guild, roleId, roleName) {
+  const cleanRoleId = String(roleId || "").trim();
+
+  if (cleanRoleId) {
+    const roleById = await guild.roles.fetch(cleanRoleId).catch(() => null);
+    if (roleById) return roleById;
+  }
+
+  const wantedName = normalizeDiscordRoleName(roleName);
+  const cachedRole = guild.roles.cache.find(
+    (role) => normalizeDiscordRoleName(role.name) === wantedName
+  );
+
+  if (cachedRole) return cachedRole;
+
+  const roles = await guild.roles.fetch().catch(() => null);
+  return roles?.find((role) => normalizeDiscordRoleName(role.name) === wantedName) || null;
+}
+
+function memberHasConfiguredRole(member, targetRole, roleName) {
+  if (!member?.roles?.cache) return false;
+  if (targetRole?.id && member.roles.cache.has(targetRole.id)) return true;
+
+  const wantedName = normalizeDiscordRoleName(roleName);
+  return member.roles.cache.some((role) => normalizeDiscordRoleName(role.name) === wantedName);
+}
+
+async function resolveVvipRole(guild) {
+  return resolveDiscordRole(guild, VVIP_ROLE_ID, VVIP_ROLE_NAME || "VVIP");
+}
+
+async function resolveExecutiveRole(guild) {
+  return resolveDiscordRole(guild, EXECUTIVE_ROLE_ID, EXECUTIVE_ROLE_NAME || "Executive");
+}
+
+function getOrderRewardTier(order) {
+  const qty = Number(order?.qty || 0);
+  const executiveMinQty =
+    Number.isFinite(EXECUTIVE_MIN_ORDER_QTY) && EXECUTIVE_MIN_ORDER_QTY > 0
+      ? EXECUTIVE_MIN_ORDER_QTY
+      : 5000;
+
+  return qty >= executiveMinQty ? "EXECUTIVE" : "VVIP";
+}
+
+function getRewardRoleDisplayName(tier, role) {
+  if (role?.name) return role.name;
+  return tier === "EXECUTIVE" ? EXECUTIVE_ROLE_NAME || "Executive" : VVIP_ROLE_NAME || "VVIP";
 }
 
 function computeTotal(qty) {
@@ -1253,6 +1312,100 @@ async function sendTestimoniMessage(client, order, staffUser) {
   }
 }
 
+function buildRewardTicketMessage(order, role, tier) {
+  const roleName = getRewardRoleDisplayName(tier, role);
+  const roleMention = role ? `<@&${role.id}>` : `**${roleName}**`;
+
+  return (
+    `🎁 **REWARD ${roleName.toUpperCase()} AKTIF!** 🎁\n\n` +
+    `Selamat <@${order.userId}>! Kamu otomatis mendapatkan role ${roleMention} ` +
+    `karena telah order Robux di **${STORE_NAME}**.\n` +
+    `🧾 Order ID: **${order.orderId}**\n` +
+    `💎 Total Robux order ini: **${fmtIDR(order.qty)}**\n\n` +
+    `Terima kasih sudah order, semoga betah jadi member ${roleName}! 💚`
+  );
+}
+
+function buildRewardDmMessage(order, role, tier) {
+  const roleName = getRewardRoleDisplayName(tier, role);
+
+  return (
+    `🎁 **REWARD ${roleName.toUpperCase()} AKTIF!** 🎁\n\n` +
+    `Selamat! Kamu otomatis mendapatkan role **${roleName}** ` +
+    `karena telah order Robux di **${STORE_NAME}**.\n` +
+    `🧾 Order ID: **${order.orderId}**\n` +
+    `💎 Total Robux order ini: **${fmtIDR(order.qty)}**\n\n` +
+    `Terima kasih sudah order, semoga betah jadi member ${roleName}! 💚`
+  );
+}
+
+async function grantOrderRewardRoleIfNeeded(client, order, ticketChannel) {
+  try {
+    const guild = await client.guilds.fetch(order.guildId || GUILD_ID).catch(() => null);
+    if (!guild) return { granted: false, skipped: false, reason: "GUILD_NOT_FOUND" };
+
+    const member = await guild.members.fetch(order.userId).catch(() => null);
+    if (!member) return { granted: false, skipped: false, reason: "MEMBER_NOT_FOUND" };
+
+    const executiveRole = await resolveExecutiveRole(guild);
+    if (memberHasConfiguredRole(member, executiveRole, EXECUTIVE_ROLE_NAME || "Executive")) {
+      return { granted: false, skipped: true, reason: "ALREADY_HAS_EXECUTIVE" };
+    }
+
+    const tier = getOrderRewardTier(order);
+    const role = tier === "EXECUTIVE" ? executiveRole : await resolveVvipRole(guild);
+    const roleName = tier === "EXECUTIVE" ? EXECUTIVE_ROLE_NAME || "Executive" : VVIP_ROLE_NAME || "VVIP";
+
+    if (!role) {
+      console.error(
+        `${roleName} role not found. Set ${tier === "EXECUTIVE" ? "EXECUTIVE_ROLE_ID" : "VVIP_ROLE_ID"} or create role named ${roleName}.`
+      );
+      return { granted: false, skipped: false, reason: "ROLE_NOT_FOUND", tier };
+    }
+
+    if (tier === "VVIP" && memberHasConfiguredRole(member, role, roleName)) {
+      return { granted: false, skipped: true, reason: "ALREADY_HAS_VVIP" };
+    }
+
+    await member.roles.add(role, `Reward ${roleName} order Robux ${fmtIDR(order.qty)} (${order.orderId})`);
+
+    order.rewardRoleTier = tier;
+    order.rewardRoleId = role.id;
+    order.rewardRoleGivenAt = nowIso();
+
+    if (tier === "VVIP") {
+      order.vvipRewardRoleId = role.id;
+      order.vvipRewardGivenAt = order.rewardRoleGivenAt;
+    }
+
+    if (tier === "EXECUTIVE") {
+      order.executiveRewardRoleId = role.id;
+      order.executiveRewardGivenAt = order.rewardRoleGivenAt;
+    }
+
+    orders.set(order.orderId, order);
+    saveOrders();
+
+    if (ticketChannel?.send) {
+      await ticketChannel
+        .send({ content: buildRewardTicketMessage(order, role, tier) })
+        .catch((e) => console.error(`${roleName} ticket reward message error:`, e));
+    }
+
+    const customerUser = await client.users.fetch(order.userId).catch(() => null);
+    if (customerUser) {
+      await customerUser
+        .send({ content: buildRewardDmMessage(order, role, tier) })
+        .catch((e) => console.error(`${roleName} DM reward message error:`, e));
+    }
+
+    return { granted: true, skipped: false, reason: null, tier, roleId: role.id };
+  } catch (e) {
+    console.error("grantOrderRewardRoleIfNeeded error:", e);
+    return { granted: false, skipped: false, reason: "ERROR" };
+  }
+}
+
 async function sendAutoStockBroadcast(client, mode) {
   const embed = mode === "OUT" ? buildStockOutBroadcastEmbed() : buildStockReadyBroadcastEmbed();
 
@@ -1814,6 +1967,8 @@ export function setupOrderRobux(discordClient) {
             components: buildButtonsAfterDone(order.orderId),
           })
           .catch(() => {});
+
+        await grantOrderRewardRoleIfNeeded(client, order, i.channel);
 
         await sendTestimoniMessage(client, order, i.user).catch(() => {});
 
