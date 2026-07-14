@@ -724,7 +724,9 @@ export function setupFashionShow(discordClient) {
 
     console.log("Slash commands registered: /delete, /setkuota, /openfs, /closefs");
 
-    await refreshAllMessages(client);
+    // Saat bot restart/redeploy, jangan broadcast ulang list peserta.
+    // Panel pendaftaran tetap disinkronkan, channel peserta hanya berubah karena aksi data/status yang relevan.
+    await refreshPanelMessage(client);
   } catch (e) {
     console.error("Ready error:", e);
   }
@@ -766,6 +768,7 @@ client.on("interactionCreate", async (i) => {
       db.isOpen = true;
       saveDb();
 
+      // Membuka pendaftaran memperbarui panel sekaligus broadcast ulang list peserta.
       await refreshAllMessages(client);
 
       return i.reply({
@@ -919,6 +922,7 @@ if (i.isChatInputCommand() && i.commandName === "deleteall") {
       db.quota = jumlah;
       saveDb();
 
+      // Perubahan kuota memperbarui panel sekaligus broadcast ulang list peserta.
       await refreshAllMessages(client);
 
       return i.reply({

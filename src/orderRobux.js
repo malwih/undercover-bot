@@ -1304,8 +1304,9 @@ async function sendTestimoniMessage(client, order, staffUser) {
     const customerUser = await client.users.fetch(order.userId).catch(() => null);
 
     await channel.send({
-      content: "✨ **Testimoni order baru berhasil diproses!** ✨",
+      content: "@everyone\n✨ **Testimoni order baru berhasil diproses!** ✨",
       embeds: [buildTestimoniEmbed(order, customerUser, staffUser)],
+      allowedMentions: { parse: ["everyone"] },
     });
   } catch (e) {
     console.error("sendTestimoniMessage error:", e);
@@ -1681,8 +1682,8 @@ export function setupOrderRobux(discordClient) {
 
     console.log("Slash commands /proses, /tagmap, and /order registered.");
 
+    // Sinkronkan stok/panel saat startup tanpa broadcast restart/redeploy.
     await syncStockAndPanel(client, { suppressBroadcast: true });
-    await sendRedeployStockBroadcast(client).catch(() => {});
 
     setInterval(async () => {
       try {
