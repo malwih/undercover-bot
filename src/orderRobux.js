@@ -941,7 +941,7 @@ async function refreshPanelMessage(client) {
 function buildOrderModal() {
   const modal = new ModalBuilder()
     .setCustomId("ob_order_modal_submit")
-    .setTitle("Order UNDERCOVER");
+    .setTitle("Order Robux - UNDERCOVER");
 
   const username = new TextInputBuilder()
     .setCustomId("roblox_username")
