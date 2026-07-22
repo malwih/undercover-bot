@@ -588,24 +588,6 @@ async function createMidtransQris(order) {
     headers: extraHeaders,
   });
 
-  console.log(
-  "MIDTRANS QRIS RAW RESPONSE:",
-  JSON.stringify(
-    {
-      status_code: response?.status_code,
-      status_message: response?.status_message,
-      transaction_id: response?.transaction_id,
-      order_id: response?.order_id,
-      payment_type: response?.payment_type,
-      transaction_status: response?.transaction_status,
-      acquirer: response?.acquirer,
-      actions: response?.actions,
-    },
-    null,
-    2
-  )
-);
-
   const qrAction =
     response?.actions?.find((action) => action?.name === "generate-qr-code-v2") ||
     response?.actions?.find((action) => action?.name === "generate-qr-code");
