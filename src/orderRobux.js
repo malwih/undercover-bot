@@ -2,8 +2,6 @@ import "dotenv/config";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import http from "node:http";
-import crypto from "node:crypto";
 import PDFDocument from "pdfkit";
 import {
   Client,
@@ -43,32 +41,18 @@ const ROBLOX_COOKIE = process.env.ROBLOX_COOKIE;
 const SEABANK_ACCOUNT = process.env.SEABANK_ACCOUNT || "ISI_REKENING";
 const SEABANK_NAME = process.env.SEABANK_NAME || "ISI_NAMA_REKENING";
 
-// Midtrans QRIS (Core API)
-const MIDTRANS_SERVER_KEY = String(process.env.MIDTRANS_SERVER_KEY || "").trim();
-const MIDTRANS_IS_PRODUCTION =
-  String(process.env.MIDTRANS_IS_PRODUCTION || "false").trim().toLowerCase() === "true";
-const MIDTRANS_BASE_URL = MIDTRANS_IS_PRODUCTION
-  ? "https://api.midtrans.com"
-  : "https://api.sandbox.midtrans.com";
-const MIDTRANS_QRIS_ACQUIRER = String(process.env.MIDTRANS_QRIS_ACQUIRER || "gopay")
-  .trim()
-  .toLowerCase();
-const MIDTRANS_MDR_PERCENT = Number(process.env.MIDTRANS_MDR_PERCENT || 0.7);
-const PAYMENT_ROUND_TO = Number(process.env.PAYMENT_ROUND_TO || 1000);
-const MIDTRANS_STATUS_POLL_SECONDS = Math.max(
-  10,
-  Number(process.env.MIDTRANS_STATUS_POLL_SECONDS || 20) || 20
+// ShopeePay Merchant QRIS Statis
+// Simpan gambar QRIS asli merchant pada path ini. Tidak memerlukan API/webhook.
+const QRIS_STATIC_IMAGE_PATH = path.resolve(
+  String(process.env.QRIS_STATIC_IMAGE_PATH || "./assets/qris-shopeepay-static.png").trim()
 );
-const MIDTRANS_WEBHOOK_ENABLED =
-  String(process.env.MIDTRANS_WEBHOOK_ENABLED || "true").trim().toLowerCase() !== "false";
-const MIDTRANS_WEBHOOK_HOST = String(process.env.MIDTRANS_WEBHOOK_HOST || "0.0.0.0").trim();
-const MIDTRANS_WEBHOOK_PORT =
-  Number(process.env.MIDTRANS_WEBHOOK_PORT || process.env.PORT || 3000) || 3000;
-const MIDTRANS_WEBHOOK_PATH = normalizeWebhookPath(process.env.MIDTRANS_WEBHOOK_PATH || "/midtrans/notification");
-const MIDTRANS_NOTIFICATION_URL = String(process.env.MIDTRANS_NOTIFICATION_URL || "").trim();
+const QRIS_STATIC_MERCHANT_NAME = String(
+  process.env.QRIS_STATIC_MERCHANT_NAME || "ShopeePay Merchant"
+).trim();
 
 const ELIGIBLE_DAYS = Number(process.env.ELIGIBLE_DAYS || 14);
 const PRICE_PER_1000 = Number(process.env.PRICE_PER_1000 || 100000);
+const QRIS_ADMIN_PERCENT = Number(process.env.QRIS_ADMIN_PERCENT || 1);
 const AUTO_CLOSE_MINUTES = Number(process.env.AUTO_CLOSE_MINUTES || 30);
 
 const STORE_NAME = process.env.STORE_NAME || "UNDERCOVER";
@@ -89,6 +73,7 @@ if (!ROBLOX_COOKIE) throw new Error("Missing ROBLOX_COOKIE (.ROBLOSECURITY)");
 const DATA_FILE = path.resolve("./orders.json");
 const TAG_SETTINGS_FILE = path.resolve("./tag_settings.json");
 const ORDER_SETTINGS_FILE = path.resolve("./order_settings.json");
+const PAYMENT_SETTINGS_FILE = path.resolve("./payment_settings.json");
 
 /** @type {Map<string, any>} */
 const orders = new Map();
@@ -100,6 +85,11 @@ let tagSettings = {
 
 let orderSettings = {
   open: true,
+};
+
+let paymentSettings = {
+  seabankEnabled: true,
+  qrisEnabled: true,
 };
 
 // ========= TAG SETTINGS =========
@@ -194,6 +184,73 @@ function saveOrderSettings() {
 
 function isOrderOpen() {
   return orderSettings.open === true;
+}
+
+// ========= PAYMENT METHOD SETTINGS =========
+function loadPaymentSettings() {
+  try {
+    if (!fs.existsSync(PAYMENT_SETTINGS_FILE)) {
+      savePaymentSettings();
+      return;
+    }
+
+    const raw = fs.readFileSync(PAYMENT_SETTINGS_FILE, "utf-8");
+    const json = JSON.parse(raw);
+
+    paymentSettings = {
+      seabankEnabled:
+        typeof json.seabankEnabled === "boolean" ? json.seabankEnabled : true,
+      qrisEnabled: typeof json.qrisEnabled === "boolean" ? json.qrisEnabled : true,
+    };
+
+    savePaymentSettings();
+  } catch (e) {
+    console.error("Failed to load payment_settings.json:", e);
+    paymentSettings = { seabankEnabled: true, qrisEnabled: true };
+    savePaymentSettings();
+  }
+}
+
+function savePaymentSettings() {
+  try {
+    fs.writeFileSync(PAYMENT_SETTINGS_FILE, JSON.stringify(paymentSettings, null, 2));
+  } catch (e) {
+    console.error("Failed to save payment_settings.json:", e);
+  }
+}
+
+function isSeaBankEnabled() {
+  return paymentSettings.seabankEnabled === true;
+}
+
+function isQrisEnabled() {
+  return paymentSettings.qrisEnabled === true;
+}
+
+function isQrisAvailable() {
+  return isQrisEnabled() && isStaticQrisConfigured();
+}
+
+function isAnyPaymentMethodAvailable() {
+  return isSeaBankEnabled() || isQrisAvailable();
+}
+
+function getEnabledPaymentMethodLabels() {
+  const methods = [];
+  if (isSeaBankEnabled()) methods.push("Transfer SeaBank");
+  if (isQrisAvailable()) methods.push("QRIS ShopeePay Merchant");
+  return methods;
+}
+
+function buildPaymentChoicePrompt(userId) {
+  const methods = getEnabledPaymentMethodLabels();
+  if (methods.length === 0) {
+    return `Halo <@${userId}> 👋\nSaat ini tidak ada metode pembayaran yang aktif. Silakan hubungi staff.`;
+  }
+
+  return (
+    `Halo <@${userId}> 👋\nBerikut detail order kamu. Silakan pilih **${methods.join("** atau **")}** melalui tombol di bawah.`
+  );
 }
 
 function buildTagExamples(name = "DisplayName") {
@@ -319,7 +376,7 @@ function fmtDateID(d) {
   return new Date(d).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" });
 }
 
-function parseMidtransDate(value) {
+function parseProviderDate(value) {
   const raw = String(value || "").trim();
   if (!raw) return null;
 
@@ -331,8 +388,8 @@ function parseMidtransDate(value) {
   return Number.isFinite(parsed.getTime()) ? parsed : null;
 }
 
-function fmtMidtransDateID(value) {
-  const parsed = parseMidtransDate(value);
+function fmtProviderDateID(value) {
+  const parsed = parseProviderDate(value);
   return parsed ? parsed.toLocaleString("id-ID", { timeZone: "Asia/Jakarta" }) : String(value || "-");
 }
 
@@ -403,31 +460,9 @@ function getRewardRoleDisplayName(tier, role) {
   return tier === "EXECUTIVE" ? EXECUTIVE_ROLE_NAME || "Executive" : VVIP_ROLE_NAME || "VVIP";
 }
 
-function normalizeWebhookPath(value) {
-  const raw = String(value || "/midtrans/notification").trim();
-  return raw.startsWith("/") ? raw : `/${raw}`;
-}
-
 function computeBaseTotal(qty) {
   const blocks = qty / 1000;
   return Math.round(blocks * PRICE_PER_1000);
-}
-
-function computeTotal(qty) {
-  const baseTotal = computeBaseTotal(qty);
-  const mdrRate = MIDTRANS_MDR_PERCENT / 100;
-  const roundTo = Number.isFinite(PAYMENT_ROUND_TO) && PAYMENT_ROUND_TO > 0
-    ? Math.floor(PAYMENT_ROUND_TO)
-    : 1000;
-
-  if (!Number.isFinite(mdrRate) || mdrRate < 0 || mdrRate >= 1) {
-    throw new Error("MIDTRANS_MDR_PERCENT harus berada di rentang 0 sampai kurang dari 100.");
-  }
-
-  // Gross-up agar setelah MDR, hasil bersih tidak pernah di bawah PRICE_PER_1000 / 1.000 Robux.
-  // Setelah itu SELALU dibulatkan ke atas ke kelipatan PAYMENT_ROUND_TO (default Rp1.000).
-  const grossRequired = baseTotal / (1 - mdrRate);
-  return Math.ceil(grossRequired / roundTo) * roundTo;
 }
 
 function getBankTotal(order) {
@@ -436,23 +471,40 @@ function getBankTotal(order) {
   return computeBaseTotal(Number(order?.qty || 0));
 }
 
-function getQrisTotal(order) {
-  const value = Number(order?.qrisTotal);
-  if (Number.isFinite(value) && value > 0) return Math.round(value);
+function getQrisAdminPercent() {
+  return Number.isFinite(QRIS_ADMIN_PERCENT) && QRIS_ADMIN_PERCENT >= 0
+    ? QRIS_ADMIN_PERCENT
+    : 1;
+}
 
-  // Backward compatibility untuk order QRIS yang dibuat oleh versi sebelumnya.
-  if (order?.paymentMethod === "MIDTRANS_QRIS") {
-    const legacyTotal = Number(order?.total);
-    if (Number.isFinite(legacyTotal) && legacyTotal > 0) return Math.round(legacyTotal);
+function getQrisAdminFee(order) {
+  const bankTotal = getBankTotal(order);
+  return Math.round((bankTotal * getQrisAdminPercent()) / 100);
+}
+
+function getQrisTotal(order) {
+  // Order QRIS statis baru: harga dasar SeaBank + biaya admin QRIS.
+  if (order?.paymentMethod === "SHOPEEPAY_QRIS_STATIC") {
+    const explicit = Number(order?.paymentAmount ?? order?.qrisTotal);
+    if (Number.isFinite(explicit) && explicit > 0) return Math.round(explicit);
+    return getBankTotal(order) + getQrisAdminFee(order);
   }
 
-  return computeTotal(Number(order?.qty || 0));
+  // Kompatibilitas invoice/order lama dari QRIS dinamis Midtrans/ShopeePay.
+  if (["SHOPEEPAY_QRIS", "MIDTRANS_QRIS"].includes(order?.paymentMethod)) {
+    const legacy = Number(order?.paymentAmount ?? order?.qrisTotal ?? order?.total);
+    if (Number.isFinite(legacy) && legacy > 0) return Math.round(legacy);
+  }
+
+  return getBankTotal(order) + getQrisAdminFee(order);
 }
 
 function isLegacySeaBankOrder(order) {
   return (
     ["AWAITING_PROOF", "PROOF_SUBMITTED"].includes(order?.status) &&
-    !order?.midtransOrderId
+    !["SHOPEEPAY_QRIS_STATIC", "SHOPEEPAY_QRIS", "MIDTRANS_QRIS"].includes(
+      order?.paymentMethod
+    )
   );
 }
 
@@ -460,12 +512,13 @@ function getPaymentTotal(order) {
   const explicit = Number(order?.paymentAmount);
   if (Number.isFinite(explicit) && explicit > 0) return Math.round(explicit);
 
-  // Compatibility untuk order SeaBank dari build sebelumnya yang sempat menyimpan
-  // paymentMethod=MIDTRANS_QRIS sebelum customer benar-benar memilih metode.
-  if (isLegacySeaBankOrder(order)) return getBankTotal(order);
-
-  if (order?.paymentMethod === "SEABANK_TRANSFER") return getBankTotal(order);
-  if (order?.paymentMethod === "MIDTRANS_QRIS") return getQrisTotal(order);
+  if (order?.paymentMethod === "SHOPEEPAY_QRIS_STATIC") return getQrisTotal(order);
+  if (["SHOPEEPAY_QRIS", "MIDTRANS_QRIS"].includes(order?.paymentMethod)) {
+    return getQrisTotal(order);
+  }
+  if (order?.paymentMethod === "SEABANK_TRANSFER" || isLegacySeaBankOrder(order)) {
+    return getBankTotal(order);
+  }
 
   const legacy = Number(order?.total);
   if (Number.isFinite(legacy) && legacy > 0) return Math.round(legacy);
@@ -474,252 +527,95 @@ function getPaymentTotal(order) {
 }
 
 function getPaymentMethodLabel(order) {
-  if (isLegacySeaBankOrder(order)) return "Bank Transfer (SeaBank)";
-  if (order?.paymentMethod === "MIDTRANS_QRIS") return "QRIS (Midtrans)";
-  if (order?.paymentMethod === "SEABANK_TRANSFER") return "Bank Transfer (SeaBank)";
+  if (order?.paymentMethod === "SHOPEEPAY_QRIS_STATIC") {
+    return "QRIS Statis (ShopeePay Merchant)";
+  }
+  if (order?.paymentMethod === "SHOPEEPAY_QRIS") {
+    return "QRIS Dinamis (ShopeePay Merchant - legacy)";
+  }
+  if (order?.paymentMethod === "MIDTRANS_QRIS") return "QRIS (Midtrans - legacy)";
+  if (order?.paymentMethod === "SEABANK_TRANSFER" || isLegacySeaBankOrder(order)) {
+    return "Bank Transfer (SeaBank)";
+  }
   return "Belum dipilih";
 }
 
-function isMidtransConfigured() {
-  return Boolean(MIDTRANS_SERVER_KEY);
-}
-
-function midtransAuthHeader() {
-  return `Basic ${Buffer.from(`${MIDTRANS_SERVER_KEY}:`).toString("base64")}`;
-}
-
-function findOrderByMidtransOrderId(midtransOrderId) {
-  if (!midtransOrderId) return null;
-  return Array.from(orders.values()).find((order) => order?.midtransOrderId === midtransOrderId) || null;
-}
-
-function buildUniqueMidtransOrderId(order) {
-  const internal = String(order.orderId || "ORDER").replace(/[^a-zA-Z0-9_-]/g, "");
-  return `UCVR-${internal}-${Date.now()}`.slice(0, 50);
-}
-
-async function midtransRequest(endpoint, { method = "GET", body = null, headers = {} } = {}) {
-  if (!isMidtransConfigured()) {
-    throw new Error("MIDTRANS_SERVER_KEY belum diisi di .env");
-  }
-
-  const response = await fetch(`${MIDTRANS_BASE_URL}${endpoint}`, {
-    method,
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      Authorization: midtransAuthHeader(),
-      ...headers,
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-
-  const text = await response.text();
-  let json = {};
-
+function isStaticQrisConfigured() {
   try {
-    json = text ? JSON.parse(text) : {};
-  } catch {
-    json = { status_message: text || `HTTP ${response.status}` };
-  }
+    if (!QRIS_STATIC_IMAGE_PATH || !fs.existsSync(QRIS_STATIC_IMAGE_PATH)) return false;
+    const stat = fs.statSync(QRIS_STATIC_IMAGE_PATH);
+    if (!stat.isFile() || stat.size <= 0) return false;
 
-  if (!response.ok) {
-    const validation = Array.isArray(json?.validation_messages)
-      ? ` | ${json.validation_messages.join("; ")}`
-      : "";
-    throw new Error(
-      `Midtrans HTTP ${response.status}: ${json?.status_message || "Request gagal"}${validation}`
-    );
-  }
-
-  return json;
-}
-
-async function createMidtransQris(order) {
-  if (order.midtransOrderId && order.midtransQrisUrl && order.status === "QRIS_PENDING") {
-    return {
-      order_id: order.midtransOrderId,
-      transaction_id: order.midtransTransactionId,
-      transaction_status: order.midtransStatus || "pending",
-      expiry_time: order.midtransExpiryTime || null,
-      actions: [{ name: "generate-qr-code", url: order.midtransQrisUrl }],
-    };
-  }
-
-  const midtransOrderId = buildUniqueMidtransOrderId(order);
-  const qrisTotal = getQrisTotal(order);
-  const expiryMinutes = Math.max(15, Math.floor(AUTO_CLOSE_MINUTES || 30));
-  const payload = {
-    payment_type: "qris",
-    transaction_details: {
-      order_id: midtransOrderId,
-      gross_amount: qrisTotal,
-    },
-    item_details: [
-      {
-        id: "ROBUX",
-        price: qrisTotal,
-        quantity: 1,
-        name: `${fmtIDR(order.qty)} Robux - ${STORE_NAME}`.slice(0, 50),
-      },
-    ],
-    qris: {
-      acquirer: MIDTRANS_QRIS_ACQUIRER,
-    },
-    custom_expiry: {
-      expiry_duration: expiryMinutes,
-      unit: "minute",
-    },
-    metadata: {
-      internal_order_id: order.orderId,
-      discord_user_id: order.userId,
-      roblox_username: order.robloxUsername,
-    },
-  };
-
-  const extraHeaders = {};
-  if (MIDTRANS_NOTIFICATION_URL) {
-    extraHeaders["X-Override-Notification"] = MIDTRANS_NOTIFICATION_URL;
-  }
-
-  const response = await midtransRequest("/v2/charge", {
-    method: "POST",
-    body: payload,
-    headers: extraHeaders,
-  });
-
-  const qrAction =
-    response?.actions?.find((action) => action?.name === "generate-qr-code-v2") ||
-    response?.actions?.find((action) => action?.name === "generate-qr-code");
-
-  if (!qrAction?.url) {
-    throw new Error("Midtrans tidak mengembalikan URL QRIS.");
-  }
-
-  order.midtransOrderId = response.order_id || midtransOrderId;
-  order.midtransTransactionId = response.transaction_id || null;
-  order.midtransStatus = response.transaction_status || "pending";
-  order.midtransQrisUrl = qrAction.url;
-  order.midtransExpiryTime = response.expiry_time || null;
-  order.midtransCreatedAt = nowIso();
-  order.paymentMethod = "MIDTRANS_QRIS";
-  order.paymentAmount = qrisTotal;
-  order.total = qrisTotal; // backward compatibility: total = nominal metode yang dipilih
-  order.status = "QRIS_PENDING";
-  orders.set(order.orderId, order);
-  saveOrders();
-
-  return response;
-}
-
-async function getMidtransStatus(order) {
-  if (!order?.midtransOrderId) throw new Error("Order belum mempunyai Midtrans Order ID.");
-  return midtransRequest(`/v2/${encodeURIComponent(order.midtransOrderId)}/status`);
-}
-
-async function cancelMidtransPending(order) {
-  if (!order?.midtransOrderId || !isMidtransConfigured()) return;
-  if (!["QRIS_PENDING", "AWAITING_PAYMENT"].includes(order.status)) return;
-
-  try {
-    await midtransRequest(`/v2/${encodeURIComponent(order.midtransOrderId)}/cancel`, {
-      method: "POST",
-    });
-  } catch (error) {
-    console.warn(`Midtrans cancel ${order.orderId} gagal:`, error?.message || error);
-  }
-}
-
-function isValidMidtransSignature(payload) {
-  if (!MIDTRANS_SERVER_KEY) return false;
-
-  const input = `${payload?.order_id || ""}${payload?.status_code || ""}${payload?.gross_amount || ""}${MIDTRANS_SERVER_KEY}`;
-  const expected = crypto.createHash("sha512").update(input).digest("hex");
-  const received = String(payload?.signature_key || "").toLowerCase();
-
-  if (!received || received.length !== expected.length) return false;
-
-  try {
-    return crypto.timingSafeEqual(Buffer.from(received), Buffer.from(expected));
+    const ext = path.extname(QRIS_STATIC_IMAGE_PATH).toLowerCase();
+    return [".png", ".jpg", ".jpeg", ".webp"].includes(ext);
   } catch {
     return false;
   }
 }
 
-function buildQrisPaymentEmbed(order) {
-  const expiry = order.midtransExpiryTime
-    ? `${fmtMidtransDateID(order.midtransExpiryTime)} WIB`
-    : `sekitar ${AUTO_CLOSE_MINUTES} menit sejak QR dibuat`;
+function getStaticQrisAttachmentName() {
+  const ext = path.extname(QRIS_STATIC_IMAGE_PATH).toLowerCase() || ".png";
+  return `qris-shopeepay-static${ext}`;
+}
+
+function buildQrisStaticEmbed(order) {
+  const baseTotal = getBankTotal(order);
+  const adminFee = getQrisAdminFee(order);
+  const total = getQrisTotal(order);
 
   return new EmbedBuilder()
-    .setTitle("💳 Pembayaran QRIS — UNDERCOVER")
+    .setTitle("🟠 PEMBAYARAN QRIS SHOPEEPAY MERCHANT")
     .setDescription(
       [
         `🧾 **Order:** ${order.orderId}`,
         `🎮 **Roblox:** \`${order.robloxUsername}\``,
         `💎 **Jumlah:** ${fmtIDR(order.qty)} Robux`,
-        `📌 **Rate:** Rp ${fmtIDR(PRICE_PER_1000)} / 1.000 Robux`,
+        `🏪 **Merchant:** **${QRIS_STATIC_MERCHANT_NAME}**`,
         "",
-        `💰 **Total Pembayaran: Rp ${fmtIDR(getQrisTotal(order))}**`,
+        `💵 **Harga Robux:** Rp ${fmtIDR(baseTotal)}`,
+        `🧾 **Biaya admin QRIS ${getQrisAdminPercent()}%:** Rp ${fmtIDR(adminFee)}`,
         "",
-        "📲 Scan QR di bawah menggunakan aplikasi bank/e-wallet yang mendukung QRIS.",
-        "✅ Nominal sudah otomatis terisi, jangan ubah nominal pembayaran.",
-        `⏳ **Berlaku sampai:** ${expiry}`,
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "💰 **TOTAL YANG HARUS DIBAYAR:**",
+        `# Rp ${fmtIDR(total)}`,
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
         "",
-        "🔄 Status pembayaran akan dicek otomatis. Kamu **tidak perlu kirim bukti transfer**.",
+        "📲 Scan gambar QRIS di bawah menggunakan aplikasi bank/e-wallet yang mendukung QRIS.",
+        "⌨️ Karena ini **QRIS statis**, masukkan nominal pembayaran secara manual.",
+        `ℹ️ Pembayaran QRIS dikenakan **biaya admin ${getQrisAdminPercent()}%**.`,
+        "⚠️ **Pastikan nominal yang dimasukkan sama persis dengan total di atas.**",
+        "",
+        "✅ Setelah pembayaran berhasil, kirim bukti pembayaran di chat ticket ini.",
+        "👮 Staff/Owner akan mengecek bukti sebelum memproses Robux.",
       ].join("\n")
     )
-    .setImage(order.midtransQrisUrl)
-    .setColor(0x3498db)
-    .setFooter({
-      text: MIDTRANS_IS_PRODUCTION
-        ? "UNDERCOVER — QRIS Midtrans Production"
-        : "UNDERCOVER — QRIS Midtrans Sandbox",
-    });
+    .setColor(0xee4d2d)
+    .setFooter({ text: "UNDERCOVER — QRIS Statis ShopeePay Merchant" });
 }
 
-function buildQrisPaidEmbed(order) {
-  return new EmbedBuilder()
-    .setTitle("✅ Pembayaran QRIS Berhasil")
-    .setDescription(
-      [
-        `🧾 **Order:** ${order.orderId}`,
-        `🎮 **Roblox:** \`${order.robloxUsername}\``,
-        `💎 **Jumlah:** ${fmtIDR(order.qty)} Robux`,
-        `💰 **Dibayar:** Rp ${fmtIDR(getQrisTotal(order))}`,
-        "",
-        "✅ Pembayaran sudah diverifikasi otomatis melalui Midtrans.",
-        "👮 Staff/Owner akan melanjutkan proses pengiriman Robux.",
-      ].join("\n")
-    )
-    .setColor(0x2ecc71)
-    .setFooter({ text: "UNDERCOVER — Payment Verified" });
+function buildQrisStaticPayload(order) {
+  if (!isStaticQrisConfigured()) {
+    throw new Error(
+      `Gambar QRIS statis belum ditemukan. Simpan file pada: ${QRIS_STATIC_IMAGE_PATH}`
+    );
+  }
+
+  const fileName = getStaticQrisAttachmentName();
+  const embed = buildQrisStaticEmbed(order).setImage(`attachment://${fileName}`);
+
+  return {
+    embeds: [embed],
+    files: [new AttachmentBuilder(QRIS_STATIC_IMAGE_PATH, { name: fileName })],
+    components: buildQrisStaticButtons(order.orderId),
+  };
 }
 
-function buildQrisFailedEmbed(order, status) {
-  const label = status === "expire" ? "Kedaluwarsa" : status === "cancel" ? "Dibatalkan" : "Gagal";
-
-  return new EmbedBuilder()
-    .setTitle(`❌ Pembayaran QRIS ${label}`)
-    .setDescription(
-      [
-        `🧾 **Order:** ${order.orderId}`,
-        `💰 **Total:** Rp ${fmtIDR(getQrisTotal(order))}`,
-        `📌 **Status Midtrans:** ${status || "unknown"}`,
-        "",
-        "Pembayaran tidak dapat dilanjutkan dengan QR tersebut.",
-      ].join("\n")
-    )
-    .setColor(0xe74c3c)
-    .setFooter({ text: "UNDERCOVER — QRIS Payment" });
-}
-
-function buildQrisPaymentButtons(orderId) {
+function buildQrisStaticButtons(orderId) {
   return [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId(`ob_qris_status:${orderId}`)
-        .setLabel("🔄 Cek Status")
+        .setCustomId(`ob_copy_bank_total:${orderId}`)
+        .setLabel("💰 Copy Total Bayar")
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId(`ob_cancel_user:${orderId}`)
@@ -727,221 +623,6 @@ function buildQrisPaymentButtons(orderId) {
         .setStyle(ButtonStyle.Danger)
     ),
   ];
-}
-
-async function editQrisMessage(client, order, { paid = false, failedStatus = null } = {}) {
-  if (!order?.channelId || !order?.paymentMessageId) return;
-
-  const guild = await client.guilds.fetch(order.guildId || GUILD_ID).catch(() => null);
-  if (!guild) return;
-
-  const channel = await guild.channels.fetch(order.channelId).catch(() => null);
-  if (!channel?.isTextBased?.()) return;
-
-  const message = await channel.messages.fetch(order.paymentMessageId).catch(() => null);
-  if (!message) return;
-
-  if (paid) {
-    await message.edit({ embeds: [buildQrisPaidEmbed(order)], components: [] }).catch(() => {});
-  } else if (failedStatus) {
-    await message
-      .edit({ embeds: [buildQrisFailedEmbed(order, failedStatus)], components: [] })
-      .catch(() => {});
-  }
-}
-
-async function applyMidtransStatus(client, order, payload, source = "status") {
-  if (!order || !payload) return false;
-
-  const status = String(payload.transaction_status || "").toLowerCase();
-  const grossAmount = Math.round(Number(payload.gross_amount || 0));
-  const expectedQrisTotal = getQrisTotal(order);
-
-  order.midtransStatus = status || order.midtransStatus || null;
-  order.midtransLastCheckedAt = nowIso();
-  order.midtransLastSource = source;
-
-  if (grossAmount && grossAmount !== expectedQrisTotal) {
-    console.error(
-      `Midtrans amount mismatch ${order.orderId}: expected=${expectedQrisTotal}, received=${grossAmount}`
-    );
-    orders.set(order.orderId, order);
-    saveOrders();
-    return false;
-  }
-
-  const fraudStatus = String(payload.fraud_status || "accept").toLowerCase();
-  const success =
-    ["settlement", "capture"].includes(status) &&
-    fraudStatus === "accept" &&
-    (!payload.status_code || String(payload.status_code) === "200");
-
-  if (success) {
-    const alreadyPaid = order.status === "PAID" || order.status === "DONE";
-
-    if (!alreadyPaid) {
-      order.status = "PAID";
-      order.paymentMethod = "MIDTRANS_QRIS";
-      order.paymentAmount = expectedQrisTotal;
-      order.total = expectedQrisTotal;
-      order.paidAt = parseMidtransDate(payload.settlement_time)?.toISOString() || nowIso();
-      order.autoCloseEnabled = false;
-      order.autoClosePaused = false;
-      order.autoCloseDeadlineAt = null;
-      orders.set(order.orderId, order);
-      saveOrders();
-
-      await syncStockAndPanel(client).catch(() => {});
-
-      const guild = await client.guilds.fetch(order.guildId || GUILD_ID).catch(() => null);
-      const channel = guild ? await guild.channels.fetch(order.channelId).catch(() => null) : null;
-      if (channel?.isTextBased?.()) {
-        await channel
-          .send(
-            `✅ **PEMBAYARAN TERVERIFIKASI OTOMATIS**\n` +
-              `💰 Rp ${fmtIDR(getQrisTotal(order))} dari <@${order.userId}> sudah diterima melalui QRIS.\n` +
-              `👮 <@&${STAFF_ROLE_ID}> silakan lanjut proses ${fmtIDR(order.qty)} Robux untuk \`${order.robloxUsername}\`.\n` +
-              `Customer tidak perlu mengirim bukti pembayaran.`
-          )
-          .catch(() => {});
-      }
-    }
-
-    await editQrisMessage(client, order, { paid: true });
-    return true;
-  }
-
-  if (["expire", "cancel", "deny"].includes(status)) {
-    const terminalStatus = status === "expire" ? "EXPIRED" : "CANCELLED";
-
-    if (!["DONE", "PAID", "CLOSED"].includes(order.status)) {
-      order.status = terminalStatus;
-      order.expiredAt = status === "expire" ? nowIso() : order.expiredAt;
-      order.cancelledAt = status !== "expire" ? nowIso() : order.cancelledAt;
-      order.autoCloseEnabled = false;
-      order.autoClosePaused = false;
-      order.autoCloseDeadlineAt = null;
-      orders.set(order.orderId, order);
-      saveOrders();
-
-      await syncStockAndPanel(client).catch(() => {});
-      await editQrisMessage(client, order, { failedStatus: status });
-
-      const guild = await client.guilds.fetch(order.guildId || GUILD_ID).catch(() => null);
-      const channel = guild ? await guild.channels.fetch(order.channelId).catch(() => null) : null;
-      if (channel?.isTextBased?.()) {
-        const reason =
-          status === "expire"
-            ? "⌛ QRIS sudah kedaluwarsa. Order dibatalkan dan stok dikembalikan. Ticket akan dihapus..."
-            : `❌ Pembayaran QRIS berstatus **${status.toUpperCase()}**. Order dibatalkan. Ticket akan dihapus...`;
-        await deleteTicketChannel(channel, order, reason, terminalStatus);
-      }
-    }
-
-    return false;
-  }
-
-  orders.set(order.orderId, order);
-  saveOrders();
-  return false;
-}
-
-const qrisCreationLocks = new Set();
-let midtransPollRunning = false;
-
-async function pollPendingMidtransOrders(client) {
-  if (!isMidtransConfigured() || midtransPollRunning) return;
-  midtransPollRunning = true;
-
-  try {
-    const pending = Array.from(orders.values()).filter(
-      (order) => order?.status === "QRIS_PENDING" && order?.midtransOrderId
-    );
-
-    for (const order of pending) {
-      try {
-        const status = await getMidtransStatus(order);
-        await applyMidtransStatus(client, order, status, "poll");
-      } catch (error) {
-        console.warn(`Midtrans status poll ${order.orderId} gagal:`, error?.message || error);
-      }
-    }
-  } finally {
-    midtransPollRunning = false;
-  }
-}
-
-function startMidtransWebhookServer(client) {
-  if (!MIDTRANS_WEBHOOK_ENABLED || !isMidtransConfigured()) return null;
-  if (!Number.isFinite(MIDTRANS_WEBHOOK_PORT) || MIDTRANS_WEBHOOK_PORT <= 0) return null;
-
-  const server = http.createServer(async (req, res) => {
-    try {
-      const requestUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
-
-      if (req.method === "GET" && requestUrl.pathname === "/health") {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ ok: true, service: "undercover-midtrans" }));
-        return;
-      }
-
-      if (req.method !== "POST" || requestUrl.pathname !== MIDTRANS_WEBHOOK_PATH) {
-        res.writeHead(404, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ ok: false, error: "not_found" }));
-        return;
-      }
-
-      let raw = "";
-      for await (const chunk of req) {
-        raw += chunk;
-        if (raw.length > 1_000_000) throw new Error("Webhook body terlalu besar");
-      }
-
-      let payload;
-      try {
-        payload = JSON.parse(raw || "{}");
-      } catch {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ ok: false, error: "invalid_json" }));
-        return;
-      }
-
-      if (!isValidMidtransSignature(payload)) {
-        res.writeHead(401, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ ok: false, error: "invalid_signature" }));
-        return;
-      }
-
-      const order = findOrderByMidtransOrderId(payload.order_id);
-      if (!order) {
-        // Balas 200 agar Midtrans tidak retry terus untuk transaksi yang bukan milik instance ini.
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ ok: true, ignored: true }));
-        return;
-      }
-
-      await applyMidtransStatus(client, order, payload, "webhook");
-
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true }));
-    } catch (error) {
-      console.error("Midtrans webhook error:", error);
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: false, error: "internal_error" }));
-    }
-  });
-
-  server.on("error", (error) => {
-    console.error("Midtrans webhook server error:", error);
-  });
-
-  server.listen(MIDTRANS_WEBHOOK_PORT, MIDTRANS_WEBHOOK_HOST, () => {
-    console.log(
-      `✅ Midtrans webhook listening on ${MIDTRANS_WEBHOOK_HOST}:${MIDTRANS_WEBHOOK_PORT}${MIDTRANS_WEBHOOK_PATH}`
-    );
-  });
-
-  return server;
 }
 
 // ========= AUTO CLOSE HELPERS =========
@@ -1433,11 +1114,17 @@ function buildPanelEmbed() {
         `💎 4.000 Robux = Rp ${fmtIDR(PRICE_PER_1000 * 4)}`,
         `💎 5.000 Robux = Rp ${fmtIDR(PRICE_PER_1000 * 5)}`,
         "➡️ dan seterusnya (kelipatan 1.000)",
-        "ℹ️ Transfer SeaBank memakai rate di atas. Checkout QRIS dihitung otomatis dan dibulatkan ke atas ke ribuan terdekat.",
+        `ℹ️ Pembayaran QRIS dikenakan biaya admin **${getQrisAdminPercent()}%**.`,
         "",
         "💳 **METODE PEMBAYARAN**",
-        "• 🏦 **Transfer SeaBank** → transfer manual, upload bukti, lalu staff cek/proses",
-        "• 📱 **QRIS Midtrans** → QR dinamis, status pembayaran diverifikasi otomatis",
+        isSeaBankEnabled()
+          ? "• 🏦 **Transfer SeaBank** → transfer manual, upload bukti, lalu staff cek/proses"
+          : "• 🏦 **Transfer SeaBank** → **NONAKTIF**",
+        isQrisAvailable()
+          ? `• 🟠 **QRIS ShopeePay Merchant** → scan QR statis, biaya admin ${getQrisAdminPercent()}%, upload bukti, lalu staff cek/proses`
+          : isQrisEnabled()
+            ? "• 🟠 **QRIS ShopeePay Merchant** → **BELUM TERSEDIA (gambar QRIS belum terpasang)**"
+            : "• 🟠 **QRIS ShopeePay Merchant** → **NONAKTIF**",
         "",
         "**Cara order (step by step)**",
         "1) Klik tombol **ORDER ROBUX** di bawah",
@@ -1447,9 +1134,9 @@ function buildPanelEmbed() {
           ? `4) Bot cek Display Name Roblox wajib ada tag **${tagKeyword}**`
           : "4) Bot cek data Roblox",
         "5) Ticket dibuat otomatis jika memenuhi pengecekan awal",
-        "6) Pilih **Transfer SeaBank** atau **Bayar QRIS**",
+        "6) Pilih metode pembayaran yang sedang aktif",
         "7) SeaBank: transfer → upload bukti → staff cek",
-        "8) QRIS: scan QR → bot verifikasi pembayaran otomatis",
+        `8) QRIS: scan QR statis → bayar harga + admin ${getQrisAdminPercent()}% → upload bukti → staff cek`,
         "9) Setelah pembayaran valid, staff melanjutkan pengiriman Robux",
         "",
         "⚠️ **Metode pembayaran terkunci setelah dipilih. Jika salah pilih, close order lalu buat order baru.**",
@@ -1467,6 +1154,14 @@ function buildStockStatusButton() {
       .setDisabled(true);
   }
 
+  if (!isAnyPaymentMethodAvailable()) {
+    return new ButtonBuilder()
+      .setCustomId("ob_stock_info")
+      .setLabel("💳 PAYMENT: OFF")
+      .setStyle(ButtonStyle.Danger)
+      .setDisabled(true);
+  }
+
   const ready = isStockReady();
   const label = ready ? "📦 STOK: READY" : "⛔ STOK: HABIS";
 
@@ -1478,7 +1173,7 @@ function buildStockStatusButton() {
 }
 
 function buildPanelComponents() {
-  const ready = isOrderOpen() && isStockReady();
+  const ready = isOrderOpen() && isStockReady() && isAnyPaymentMethodAvailable();
 
   return [
     new ActionRowBuilder().addComponents(
@@ -1589,11 +1284,15 @@ function buildCustomerStatusEmbed(order) {
         `📌 **Rate:** Rp ${fmtIDR(PRICE_PER_1000)} / 1.000 Robux`,
         "",
         "💳 **Pilih Metode Pembayaran:**",
-        `🏦 **Transfer SeaBank:** Rp ${fmtIDR(getBankTotal(order))}`,
-        `📱 **QRIS Midtrans:** Rp ${fmtIDR(getQrisTotal(order))}`,
+        isSeaBankEnabled()
+          ? `🏦 **Transfer SeaBank:** Rp ${fmtIDR(getBankTotal(order))}`
+          : "🏦 **Transfer SeaBank:** NONAKTIF",
+        isQrisAvailable()
+          ? `🟠 **QRIS ShopeePay Merchant:** Rp ${fmtIDR(getQrisTotal(order))} *(termasuk admin ${getQrisAdminPercent()}%)*`
+          : "🟠 **QRIS ShopeePay Merchant:** NONAKTIF",
         "",
         "🏦 **SeaBank:** transfer sesuai nominal → upload bukti transfer → tunggu staff cek.",
-        "📱 **QRIS:** bot membuat QR dinamis → pembayaran diverifikasi otomatis → tidak perlu upload bukti.",
+        `📱 **QRIS:** scan QR statis → bayar total termasuk admin ${getQrisAdminPercent()}% → upload bukti → tunggu staff cek.`,
         "",
         "⚠️ Setelah salah satu metode dipilih, metode pembayaran dikunci untuk order ini.",
       ].join("\n")
@@ -1619,22 +1318,35 @@ function buildCustomerStatusEmbed(order) {
 }
 
 function buildCustomerButtonsEligible(orderId) {
-  return [
-    new ActionRowBuilder().addComponents(
+  const paymentButtons = [];
+
+  if (isSeaBankEnabled()) {
+    paymentButtons.push(
       new ButtonBuilder()
         .setCustomId(`ob_bank:${orderId}`)
         .setLabel("🏦 Transfer SeaBank")
-        .setStyle(ButtonStyle.Primary),
+        .setStyle(ButtonStyle.Primary)
+    );
+  }
+
+  if (isQrisAvailable()) {
+    paymentButtons.push(
       new ButtonBuilder()
         .setCustomId(`ob_qris:${orderId}`)
-        .setLabel("📱 Bayar QRIS")
+        .setLabel(`📱 Bayar QRIS (+${getQrisAdminPercent()}%)`)
         .setStyle(ButtonStyle.Success)
-        .setDisabled(!isMidtransConfigured()),
-      new ButtonBuilder()
-        .setCustomId(`ob_cancel_user:${orderId}`)
-        .setLabel("❌ Close Order")
-        .setStyle(ButtonStyle.Danger)
-    ),
+    );
+  }
+
+  paymentButtons.push(
+    new ButtonBuilder()
+      .setCustomId(`ob_cancel_user:${orderId}`)
+      .setLabel("❌ Close Order")
+      .setStyle(ButtonStyle.Danger)
+  );
+
+  return [
+    new ActionRowBuilder().addComponents(...paymentButtons),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(`ob_copy_username:${orderId}`)
@@ -1671,22 +1383,31 @@ function buildCustomerButtonsIneligible(orderId) {
 }
 
 function buildSeaBankInstructions(order) {
+  const bankTotal = getBankTotal(order);
+
   return new EmbedBuilder()
-    .setTitle("Instruksi Pembayaran — Bank Transfer")
+    .setTitle("🏦 PEMBAYARAN SEABANK — PERHATIKAN DATA TRANSFER")
     .setDescription(
       [
-        `**Order:** ${order.orderId}`,
-        `**Total Transfer:** Rp ${fmtIDR(getBankTotal(order))}`,
+        `🧾 **Order:** ${order.orderId}`,
         "",
-        `**Bank SeaBank:** \`${SEABANK_ACCOUNT}\``,
-        `**A/N:** ${SEABANK_NAME}`,
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "🏦 **BANK TUJUAN: SEABANK**",
+        `💳 **NOMOR REKENING:**`,
+        `## ${SEABANK_ACCOUNT}`,
+        `👤 **ATAS NAMA:** **${SEABANK_NAME}**`,
         "",
-        "✅ Setelah transfer, **kirim bukti transfer (file apapun / gambar / dokumen / forward)** di chat ticket ini.",
-        "👮 Staff/Owner akan mengecek bukti pembayaran sebelum melanjutkan proses Robux.",
-        "⚠️ Pastikan nominal & rekening benar.",
+        `💰 **TOTAL YANG HARUS DIBAYAR:**`,
+        `# Rp ${fmtIDR(bankTotal)}`,
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "",
+        "⚠️ **Transfer harus sesuai rekening dan total di atas.**",
+        "✅ Setelah transfer, kirim bukti pembayaran di chat ticket ini.",
+        "👮 Staff/Owner akan mengecek bukti sebelum memproses Robux.",
       ].join("\n")
     )
-    .setFooter({ text: "UNDERCOVER" });
+    .setColor(0xffb000)
+    .setFooter({ text: "UNDERCOVER — SeaBank Transfer" });
 }
 
 function buildPaymentButtons(orderId) {
@@ -1695,6 +1416,10 @@ function buildPaymentButtons(orderId) {
       new ButtonBuilder()
         .setCustomId(`ob_copy_bank:${orderId}`)
         .setLabel("📋 Copy No. Rekening")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`ob_copy_bank_total:${orderId}`)
+        .setLabel("💰 Copy Total Bayar")
         .setStyle(ButtonStyle.Secondary)
     ),
   ];
@@ -2145,10 +1870,6 @@ async function runAutoCloseSweep(client) {
         order.status === "AWAITING_PROOF" ||
         order.status === "QRIS_PENDING"
       ) {
-        if (order.status === "QRIS_PENDING") {
-          await cancelMidtransPending(order);
-        }
-
         order.status = "EXPIRED";
         order.expiredAt = nowIso();
         order.autoCloseEnabled = false;
@@ -2220,26 +1941,171 @@ async function upsertGuildCommands(guild, commands) {
   }
 }
 
+async function findPaymentChoiceMessage(channel, order) {
+  if (!channel || !order) return null;
+
+  if (order.paymentChoiceMessageId) {
+    const direct = await channel.messages.fetch(order.paymentChoiceMessageId).catch(() => null);
+    if (direct) return direct;
+  }
+
+  const messages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+  if (!messages) return null;
+
+  return (
+    messages.find((message) =>
+      message.components?.some((row) =>
+        row.components?.some((component) =>
+          [
+            `ob_bank:${order.orderId}`,
+            `ob_qris:${order.orderId}`,
+            `ob_cancel_user:${order.orderId}`,
+          ].includes(component.customId)
+        )
+      )
+    ) || null
+  );
+}
+
+async function refreshPendingPaymentChoiceMessages(client) {
+  const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+  if (!guild) return;
+
+  for (const order of orders.values()) {
+    if (order.status !== "AWAITING_PAYMENT" || order.paymentMethod) continue;
+    if (!order.robloxEligible || !order.channelId) continue;
+
+    const channel = await guild.channels.fetch(order.channelId).catch(() => null);
+    if (!channel || channel.type !== ChannelType.GuildText) continue;
+
+    const message = await findPaymentChoiceMessage(channel, order);
+    if (!message) continue;
+
+    await message
+      .edit({
+        content: buildPaymentChoicePrompt(order.userId),
+        embeds: [buildCustomerStatusEmbed(order)],
+        components: buildCustomerButtonsEligible(order.orderId),
+      })
+      .catch((error) =>
+        console.error(`Failed to refresh payment buttons for ${order.orderId}:`, error)
+      );
+
+    if (message.id !== order.paymentChoiceMessageId) {
+      order.paymentChoiceMessageId = message.id;
+      orders.set(order.orderId, order);
+    }
+  }
+
+  saveOrders();
+}
+
+function setPaymentMethodEnabled(method, enabled) {
+  if (method === "SEABANK" || method === "ALL") {
+    paymentSettings.seabankEnabled = enabled;
+  }
+  if (method === "QRIS" || method === "ALL") {
+    paymentSettings.qrisEnabled = enabled;
+  }
+  savePaymentSettings();
+}
+
+function buildPaymentSettingsStatus() {
+  const qrisDetail = isQrisEnabled()
+    ? isStaticQrisConfigured()
+      ? "ENABLE"
+      : "ENABLE, tetapi gambar QRIS belum ditemukan"
+    : "DISABLE";
+
+  return (
+    `🏦 SeaBank: **${isSeaBankEnabled() ? "ENABLE" : "DISABLE"}**\n` +
+    `📱 QRIS ShopeePay: **${qrisDetail}**`
+  );
+}
+
+async function sendQrisProofToTestimonialChannel(client, order, sourceMessage) {
+  if (order.paymentMethod !== "SHOPEEPAY_QRIS_STATIC") return;
+
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID);
+    const channel = await guild.channels.fetch(TESTIMONI_CHANNEL_ID);
+
+    if (
+      !channel ||
+      (channel.type !== ChannelType.GuildText &&
+        channel.type !== ChannelType.GuildAnnouncement)
+    ) {
+      console.error("TESTIMONI_CHANNEL_ID must be a text or announcement channel.");
+      return;
+    }
+
+    const sourceAttachments = Array.from(sourceMessage.attachments.values()).slice(0, 10);
+    if (sourceAttachments.length === 0) return;
+
+    const embed = new EmbedBuilder()
+      .setColor(0xee4d2d)
+      .setTitle("📎 BUKTI PEMBAYARAN QRIS MASUK")
+      .setDescription(
+        [
+          `👤 **Customer:** <@${order.userId}>`,
+          `🎮 **Username Roblox:** \`${order.robloxUsername}\``,
+          `💎 **Jumlah Robux:** ${fmtIDR(order.qty)} Robux`,
+          `💵 **Harga Robux:** Rp ${fmtIDR(getBankTotal(order))}`,
+          `🧾 **Biaya Admin ${getQrisAdminPercent()}%:** Rp ${fmtIDR(getQrisAdminFee(order))}`,
+          `💰 **Total Bayar:** Rp ${fmtIDR(getPaymentTotal(order))}`,
+          `🧾 **Order ID:** \`${order.orderId}\``,
+          "",
+          "⏳ Status: **Menunggu verifikasi staff**",
+        ].join("\n")
+      )
+      .setFooter({ text: "UNDERCOVER — Bukti QRIS" })
+      .setTimestamp();
+
+    const files = sourceAttachments.map((attachment, index) => ({
+      attachment: attachment.url,
+      name: attachment.name || `bukti-qris-${order.orderId}-${index + 1}`,
+    }));
+
+    try {
+      await channel.send({
+        content: `📱 Bukti pembayaran QRIS baru dari <@${order.userId}>`,
+        embeds: [embed],
+        files,
+        allowedMentions: { users: [order.userId] },
+      });
+    } catch (uploadError) {
+      console.error(`Failed to re-upload QRIS proof ${order.orderId}:`, uploadError);
+      const links = sourceAttachments
+        .map((attachment, index) => `${index + 1}. ${attachment.url}`)
+        .join("\n");
+
+      await channel.send({
+        content:
+          `📱 Bukti pembayaran QRIS baru dari <@${order.userId}>\n${links}`,
+        embeds: [embed],
+        allowedMentions: { users: [order.userId] },
+      });
+    }
+  } catch (error) {
+    console.error("sendQrisProofToTestimonialChannel error:", error);
+  }
+}
+
 export function setupOrderRobux(discordClient) {
   client = discordClient;
   loadOrders();
   loadTagSettings();
   loadOrderSettings();
+  loadPaymentSettings();
   client.once("ready", async () => {
     console.log(`Logged in as ${client.user.tag}`);
 
-    if (!isMidtransConfigured()) {
-      console.warn("⚠️ MIDTRANS_SERVER_KEY belum diisi. Tombol Bayar QRIS akan dinonaktifkan.");
-    } else {
-      console.log(
-        `✅ Midtrans QRIS aktif (${MIDTRANS_IS_PRODUCTION ? "PRODUCTION" : "SANDBOX"}) | MDR config ${MIDTRANS_MDR_PERCENT}% | pembulatan Rp${fmtIDR(PAYMENT_ROUND_TO)}`
+    if (!isStaticQrisConfigured()) {
+      console.warn(
+        `⚠️ Gambar QRIS statis belum ditemukan. Tombol Bayar QRIS dinonaktifkan. Path: ${QRIS_STATIC_IMAGE_PATH}`
       );
-      startMidtransWebhookServer(client);
-      setInterval(
-        () => pollPendingMidtransOrders(client),
-        MIDTRANS_STATUS_POLL_SECONDS * 1000
-      ).unref();
-      setTimeout(() => pollPendingMidtransOrders(client), 5000).unref();
+    } else {
+      console.log(`✅ QRIS statis ShopeePay tersedia: ${QRIS_STATIC_IMAGE_PATH}`);
     }
 
     setInterval(() => runAutoCloseSweep(client), 60 * 1000).unref();
@@ -2303,9 +2169,41 @@ export function setupOrderRobux(discordClient) {
             )
         )
         .toJSON(),
+
+      new SlashCommandBuilder()
+        .setName("enable")
+        .setDescription("Staff: aktifkan metode pembayaran")
+        .addStringOption((option) =>
+          option
+            .setName("metode")
+            .setDescription("Metode pembayaran yang diaktifkan")
+            .setRequired(true)
+            .addChoices(
+              { name: "SeaBank", value: "SEABANK" },
+              { name: "QRIS ShopeePay", value: "QRIS" },
+              { name: "Semua metode", value: "ALL" }
+            )
+        )
+        .toJSON(),
+
+      new SlashCommandBuilder()
+        .setName("disable")
+        .setDescription("Staff: matikan metode pembayaran")
+        .addStringOption((option) =>
+          option
+            .setName("metode")
+            .setDescription("Metode pembayaran yang dimatikan")
+            .setRequired(true)
+            .addChoices(
+              { name: "SeaBank", value: "SEABANK" },
+              { name: "QRIS ShopeePay", value: "QRIS" },
+              { name: "Semua metode", value: "ALL" }
+            )
+        )
+        .toJSON(),
     ]);
 
-    console.log("Slash commands /proses, /tagmap, and /order registered.");
+    console.log("Slash commands /proses, /tagmap, /order, /enable, and /disable registered.");
 
     // Sinkronkan stok/panel saat startup tanpa broadcast restart/redeploy.
     await syncStockAndPanel(client, { suppressBroadcast: true });
@@ -2352,11 +2250,25 @@ export function setupOrderRobux(discordClient) {
         const hasAnyAttachment = msg.attachments && msg.attachments.size > 0;
         if (!hasAnyAttachment) return;
 
+        const selectedMethod =
+          order.paymentMethod === "SHOPEEPAY_QRIS_STATIC"
+            ? "SHOPEEPAY_QRIS_STATIC"
+            : "SEABANK_TRANSFER";
+        const paymentTotal = getPaymentTotal(order);
+
         order.status = "PROOF_SUBMITTED";
-        order.paymentMethod = "SEABANK_TRANSFER";
-        order.paymentAmount = getBankTotal(order);
-        order.total = getBankTotal(order);
+        order.paymentMethod = selectedMethod;
+        order.paymentAmount = paymentTotal;
+        order.total = paymentTotal;
         order.proofSubmittedAt = nowIso();
+        order.proofMessageId = msg.id;
+        order.proofAttachments = Array.from(msg.attachments.values()).map((attachment) => ({
+          id: attachment.id,
+          name: attachment.name || null,
+          url: attachment.url,
+          contentType: attachment.contentType || null,
+          size: attachment.size || null,
+        }));
         order.autoCloseEnabled = false;
         order.autoClosePaused = false;
         order.autoCloseDeadlineAt = null;
@@ -2368,11 +2280,15 @@ export function setupOrderRobux(discordClient) {
 
         await syncStockAndPanel(client).catch(() => {});
 
+        if (selectedMethod === "SHOPEEPAY_QRIS_STATIC") {
+          await sendQrisProofToTestimonialChannel(client, order, msg);
+        }
+
         await msg.channel
           .send(
-            `✅ Bukti transfer SeaBank diterima dari <@${order.userId}>.\n` +
+            `✅ Bukti pembayaran **${getPaymentMethodLabel(order)}** diterima dari <@${order.userId}>.\n` +
               `📎 Tipe bukti: **file/forward**\n` +
-              `💰 Nominal order: **Rp ${fmtIDR(getBankTotal(order))}**\n` +
+              `💰 Nominal order: **Rp ${fmtIDR(getPaymentTotal(order))}**\n` +
               `👮‍♂️ Staff/Owner akan mengecek pembayaran lalu memproses Robux kamu, mohon bersedia menunggu.`
           )
           .catch(() => {});
@@ -2385,6 +2301,46 @@ export function setupOrderRobux(discordClient) {
   // ========= INTERACTIONS =========
   client.on("interactionCreate", async (i) => {
     try {
+      if (
+        i.isChatInputCommand() &&
+        (i.commandName === "enable" || i.commandName === "disable")
+      ) {
+        const member = await i.guild.members.fetch(i.user.id).catch(() => null);
+
+        if (!isStaff(member)) {
+          return i.reply({ content: "Khusus staff/owner.", ephemeral: true });
+        }
+
+        const method = i.options.getString("metode", true);
+        const enabled = i.commandName === "enable";
+
+        setPaymentMethodEnabled(method, enabled);
+
+        await refreshPanelMessage(client).catch(() => {});
+        await refreshPendingPaymentChoiceMessages(client).catch(() => {});
+
+        const methodLabel =
+          method === "SEABANK"
+            ? "SeaBank"
+            : method === "QRIS"
+              ? "QRIS ShopeePay"
+              : "semua metode pembayaran";
+
+        const qrisWarning =
+          enabled && (method === "QRIS" || method === "ALL") && !isStaticQrisConfigured()
+            ? `\n⚠️ QRIS sudah berstatus ENABLE, tetapi tombol belum muncul sampai gambar QRIS tersedia di \`${QRIS_STATIC_IMAGE_PATH}\`.`
+            : "";
+
+        return i.reply({
+          content:
+            `${enabled ? "✅" : "⛔"} **${methodLabel}** sudah **${
+              enabled ? "DIAKTIFKAN" : "DINONAKTIFKAN"
+            }**.\n\n` +
+            `${buildPaymentSettingsStatus()}${qrisWarning}`,
+          ephemeral: true,
+        });
+      }
+
       if (i.isChatInputCommand() && i.commandName === "order") {
         const member = await i.guild.members.fetch(i.user.id).catch(() => null);
 
@@ -2399,7 +2355,8 @@ export function setupOrderRobux(discordClient) {
             content:
               `📌 **Status Order Robux**\n` +
               `Order: **${isOrderOpen() ? "OPEN" : "CLOSE"}**\n` +
-              `Stok Roblox: **${stockCache.ok ? (isStockReady() ? "READY" : "HABIS") : "GAGAL FETCH"}**`,
+              `Stok Roblox: **${stockCache.ok ? (isStockReady() ? "READY" : "HABIS") : "GAGAL FETCH"}**\n\n` +
+              buildPaymentSettingsStatus(),
             ephemeral: true,
           });
         }
@@ -2560,9 +2517,9 @@ export function setupOrderRobux(discordClient) {
           return i.reply({
             content:
               order.status === "QRIS_PENDING"
-                ? "Pembayaran QRIS masih **PENDING**. Tunggu sampai bot memverifikasi pembayaran."
+                ? "Order QRIS versi lama masih berstatus **PENDING** dan tidak dapat diverifikasi otomatis oleh mode QRIS statis."
                 : order.status === "AWAITING_PROOF"
-                  ? "Transfer SeaBank masih menunggu **bukti pembayaran dari customer**. Staff belum bisa menyelesaikan order."
+                  ? `${getPaymentMethodLabel(order)} masih menunggu **bukti pembayaran dari customer**. Staff belum bisa menyelesaikan order.`
                   : "Pembayaran belum terverifikasi.",
             ephemeral: true,
           });
@@ -2674,6 +2631,13 @@ export function setupOrderRobux(discordClient) {
           });
         }
 
+        if (!isAnyPaymentMethodAvailable()) {
+          return i.reply({
+            content: "⛔ Saat ini tidak ada metode pembayaran yang aktif. Silakan hubungi staff.",
+            ephemeral: true,
+          });
+        }
+
         return i.showModal(buildOrderModal());
       }
 
@@ -2692,6 +2656,13 @@ export function setupOrderRobux(discordClient) {
             content:
               "⛔ Stok Robux sedang **HABIS**.\n" +
               "Silakan tunggu update stok ready, lalu klik tombol order lagi.",
+            ephemeral: true,
+          });
+        }
+
+        if (!isAnyPaymentMethodAvailable()) {
+          return i.reply({
+            content: "⛔ Saat ini tidak ada metode pembayaran yang aktif. Silakan hubungi staff.",
             ephemeral: true,
           });
         }
@@ -2767,10 +2738,16 @@ export function setupOrderRobux(discordClient) {
             });
           }
 
+          if (!isAnyPaymentMethodAvailable()) {
+            return i.editReply(
+              "⛔ Order tidak dapat dibuat karena saat ini tidak ada metode pembayaran yang aktif."
+            );
+          }
+
           const orderId = newOrderId();
           const baseTotal = computeBaseTotal(qty);
-          const qrisTotal = computeTotal(qty);
-          const total = qrisTotal; // backward compatibility; nominal final dikunci saat metode dipilih
+          const qrisTotal = baseTotal + Math.round((baseTotal * getQrisAdminPercent()) / 100); // QRIS + biaya admin
+          const total = baseTotal; // nominal final dikunci saat metode dipilih
 
           const guild = await client.guilds.fetch(GUILD_ID);
           const user = i.user;
@@ -2875,13 +2852,19 @@ export function setupOrderRobux(discordClient) {
           const statusEmbed = buildCustomerStatusEmbed(order);
 
           if (order.robloxEligible) {
-            await ticket
+            const paymentChoiceMessage = await ticket
               .send({
-                content: `Halo <@${user.id}> 👋\nBerikut detail order kamu. Silakan pilih **Transfer SeaBank** atau **QRIS** melalui tombol di bawah.`,
+                content: buildPaymentChoicePrompt(user.id),
                 embeds: [statusEmbed],
                 components: buildCustomerButtonsEligible(orderId),
               })
-              .catch(() => {});
+              .catch(() => null);
+
+            if (paymentChoiceMessage) {
+              order.paymentChoiceMessageId = paymentChoiceMessage.id;
+              orders.set(order.orderId, order);
+              saveOrders();
+            }
 
             if (order.note) {
               await ticket.send({ content: `📝 Catatan: ${order.note}` }).catch(() => {});
@@ -2913,13 +2896,13 @@ export function setupOrderRobux(discordClient) {
 
       const needsOrder = [
         "ob_qris",
-        "ob_qris_status",
         "ob_bank",
         "ob_cancel_user",
         "ob_close_ineligible",
         "ob_copy_username",
         "ob_close_ticket",
         "ob_copy_bank",
+        "ob_copy_bank_total",
         "ob_order_retry",
       ];
 
@@ -2968,6 +2951,13 @@ export function setupOrderRobux(discordClient) {
           });
         }
 
+        if (!isAnyPaymentMethodAvailable()) {
+          return i.reply({
+            content: "⛔ Saat ini tidak ada metode pembayaran yang aktif. Silakan hubungi staff.",
+            ephemeral: true,
+          });
+        }
+
         return i.showModal(buildOrderModal());
       }
 
@@ -3005,7 +2995,130 @@ export function setupOrderRobux(discordClient) {
         });
       }
 
+
+      if (key === "ob_copy_bank_total") {
+        const member = await i.guild.members.fetch(i.user.id).catch(() => null);
+        const allowed = i.user.id === order.userId || isStaff(member);
+
+        if (!allowed) {
+          return i.reply({
+            content: "Kamu tidak punya akses untuk order ini.",
+            ephemeral: true,
+          });
+        }
+
+        return i.reply({
+          content: `💰 Copy total pembayaran berikut:
+\`\`\`
+${getPaymentTotal(order)}
+\`\`\`
+**Format:** Rp ${fmtIDR(getPaymentTotal(order))}`,
+          ephemeral: true,
+        });
+      }
+
       if (key === "ob_qris") {
+        if (!isQrisEnabled() && order.paymentMethod !== "SHOPEEPAY_QRIS_STATIC") {
+          return i.reply({
+            content: "⛔ Pembayaran via QRIS sedang dinonaktifkan oleh staff.",
+            ephemeral: true,
+          });
+        }
+
+        if (!order.robloxEligible) {
+          return i.reply({ content: "Order ini tidak eligible.", ephemeral: true });
+        }
+
+        const member = await i.guild.members.fetch(i.user.id).catch(() => null);
+        const allowed = i.user.id === order.userId || isStaff(member);
+
+        if (!allowed) {
+          return i.reply({ content: "Kamu tidak punya akses untuk order ini.", ephemeral: true });
+        }
+
+        if (
+          order.paymentMethod === "SEABANK_TRANSFER" ||
+          (order.status === "PROOF_SUBMITTED" &&
+            order.paymentMethod !== "SHOPEEPAY_QRIS_STATIC")
+        ) {
+          return i.reply({
+            content:
+              "🏦 Metode pembayaran order ini sudah dikunci ke **Transfer SeaBank**. " +
+              "Silakan lanjut transfer dan upload bukti. Jika ingin QRIS, close order lalu buat order baru.",
+            ephemeral: true,
+          });
+        }
+
+        if (!isStaticQrisConfigured()) {
+          return i.reply({
+            content:
+              `⚠️ Gambar QRIS statis belum dipasang. Simpan QRIS asli merchant ke \`${QRIS_STATIC_IMAGE_PATH}\` lalu restart bot.`,
+            ephemeral: true,
+          });
+        }
+
+        if (["PAID", "DONE", "PROOF_SUBMITTED"].includes(order.status)) {
+          return i.reply({
+            content:
+              order.status === "PROOF_SUBMITTED"
+                ? "✅ Bukti pembayaran sudah dikirim dan sedang menunggu pengecekan staff."
+                : "✅ Pembayaran/order ini sudah diproses.",
+            ephemeral: true,
+          });
+        }
+
+        if (["CANCELLED", "EXPIRED", "CLOSED"].includes(order.status)) {
+          return i.reply({
+            content: "Order ini sudah ditutup/expired dan tidak bisa dibayar.",
+            ephemeral: true,
+          });
+        }
+
+        const total = getQrisTotal(order);
+
+        let paymentPayload;
+        try {
+          paymentPayload = buildQrisStaticPayload(order);
+        } catch (error) {
+          console.error(`Show static QRIS ${order.orderId} error:`, error);
+          return i.reply({
+            content:
+              "❌ Gagal menampilkan gambar QRIS statis. Periksa path/file gambar QRIS pada konfigurasi bot.",
+            ephemeral: true,
+          });
+        }
+
+        order.paymentMethod = "SHOPEEPAY_QRIS_STATIC";
+        order.paymentAmount = total;
+        order.qrisTotal = total;
+        order.total = total;
+        order.status = "AWAITING_PROOF";
+
+        setAutoCloseDeadline(order, AUTO_CLOSE_MINUTES, "static_qris_clicked");
+        orders.set(order.orderId, order);
+        saveOrders();
+
+        await syncStockAndPanel(client).catch(() => {});
+        await i.reply(paymentPayload);
+
+        await i.channel
+          .send(
+            `📌 QRIS dikenakan **biaya admin ${getQrisAdminPercent()}%**. Setelah membayar **Rp ${fmtIDR(total)}**, kirim **bukti pembayaran (gambar/file/dokumen/forward)** di sini. ` +
+              `Jika dalam **${AUTO_CLOSE_MINUTES} menit** tidak mengirim bukti, order akan ditutup otomatis.`
+          )
+          .catch(() => {});
+
+        return;
+      }
+
+      if (key === "ob_bank") {
+        if (!isSeaBankEnabled() && order.paymentMethod !== "SEABANK_TRANSFER") {
+          return i.reply({
+            content: "⛔ Pembayaran via SeaBank sedang dinonaktifkan oleh staff.",
+            ephemeral: true,
+          });
+        }
+
         if (!order.robloxEligible) {
           return i.reply({
             content: "Order ini tidak eligible.",
@@ -3024,154 +3137,10 @@ export function setupOrderRobux(discordClient) {
         }
 
         if (
-          order.paymentMethod === "SEABANK_TRANSFER" ||
-          (["AWAITING_PROOF", "PROOF_SUBMITTED"].includes(order.status) && !order.midtransOrderId)
+          ["SHOPEEPAY_QRIS_STATIC", "SHOPEEPAY_QRIS", "MIDTRANS_QRIS"].includes(
+            order.paymentMethod
+          ) && !isLegacySeaBankOrder(order)
         ) {
-          return i.reply({
-            content:
-              "🏦 Metode pembayaran order ini sudah dikunci ke **Transfer SeaBank**. " +
-              "Silakan lanjut transfer dan upload bukti. Jika ingin QRIS, close order lalu buat order baru.",
-            ephemeral: true,
-          });
-        }
-
-        if (!isMidtransConfigured()) {
-          return i.reply({
-            content:
-              "⚠️ Midtrans belum dikonfigurasi. Staff perlu mengisi `MIDTRANS_SERVER_KEY` di `.env` lalu restart bot.",
-            ephemeral: true,
-          });
-        }
-
-        if (["PAID", "DONE"].includes(order.status)) {
-          return i.reply({
-            content: "✅ Pembayaran order ini sudah terverifikasi.",
-            ephemeral: true,
-          });
-        }
-
-        if (["CANCELLED", "EXPIRED", "CLOSED"].includes(order.status)) {
-          return i.reply({
-            content: "Order ini sudah ditutup/expired dan tidak bisa dibayar.",
-            ephemeral: true,
-          });
-        }
-
-        if (qrisCreationLocks.has(order.orderId)) {
-          return i.reply({
-            content: "⏳ QRIS untuk order ini sedang dibuat. Tunggu sebentar.",
-            ephemeral: true,
-          });
-        }
-
-        qrisCreationLocks.add(order.orderId);
-        await i.deferReply();
-
-        try {
-          await createMidtransQris(order);
-
-          if (order.status === "QRIS_PENDING") {
-            setAutoCloseDeadline(order, AUTO_CLOSE_MINUTES, "qris_created");
-          }
-
-          orders.set(order.orderId, order);
-          saveOrders();
-          await syncStockAndPanel(client).catch(() => {});
-
-          const alreadyPaid = ["PAID", "DONE"].includes(order.status);
-          await i.editReply({
-            embeds: [alreadyPaid ? buildQrisPaidEmbed(order) : buildQrisPaymentEmbed(order)],
-            components: alreadyPaid ? [] : buildQrisPaymentButtons(order.orderId),
-          });
-
-          const paymentMessage = await i.fetchReply().catch(() => null);
-          if (paymentMessage?.id) {
-            order.paymentMessageId = paymentMessage.id;
-            orders.set(order.orderId, order);
-            saveOrders();
-          }
-
-          // Sinkronisasi sekali lagi setelah message ID tersimpan untuk menutup race dengan webhook.
-          getMidtransStatus(order)
-            .then((statusData) => applyMidtransStatus(client, order, statusData, "post_create_check"))
-            .catch(() => {});
-        } catch (error) {
-          console.error(`Create Midtrans QRIS ${order.orderId} error:`, error);
-          await i
-            .editReply({
-              content:
-                "❌ Gagal membuat QRIS Midtrans. Silakan coba lagi beberapa saat atau hubungi staff.\n" +
-                `Kode: \`${String(error?.message || error).slice(0, 180)}\``,
-              embeds: [],
-              components: [],
-            })
-            .catch(() => {});
-        } finally {
-          qrisCreationLocks.delete(order.orderId);
-        }
-
-        return;
-      }
-
-      if (key === "ob_qris_status") {
-        const member = await i.guild.members.fetch(i.user.id).catch(() => null);
-        const allowed = i.user.id === order.userId || isStaff(member);
-
-        if (!allowed) {
-          return i.reply({
-            content: "Kamu tidak punya akses untuk order ini.",
-            ephemeral: true,
-          });
-        }
-
-        if (!order.midtransOrderId) {
-          return i.reply({
-            content: "QRIS belum dibuat untuk order ini.",
-            ephemeral: true,
-          });
-        }
-
-        await i.deferReply({ ephemeral: true });
-
-        try {
-          const statusData = await getMidtransStatus(order);
-          await applyMidtransStatus(client, order, statusData, "manual_check");
-
-          const status = String(statusData.transaction_status || "unknown").toUpperCase();
-          const latestOrder = orders.get(order.orderId) || order;
-
-          if (["PAID", "DONE"].includes(latestOrder.status)) {
-            return i.editReply(
-              `✅ Pembayaran sudah **TERVERIFIKASI**. Total: **Rp ${fmtIDR(getPaymentTotal(latestOrder))}**.`
-            );
-          }
-
-          return i.editReply(`🔄 Status Midtrans saat ini: **${status}**.`);
-        } catch (error) {
-          console.error(`Manual Midtrans status ${order.orderId} error:`, error);
-          return i.editReply("⚠️ Gagal mengecek status Midtrans. Coba lagi beberapa saat.");
-        }
-      }
-
-      if (key === "ob_bank") {
-        if (!order.robloxEligible) {
-          return i.reply({
-            content: "Order ini tidak eligible.",
-            ephemeral: true,
-          });
-        }
-
-        const member = await i.guild.members.fetch(i.user.id).catch(() => null);
-        const allowed = i.user.id === order.userId || isStaff(member);
-
-        if (!allowed) {
-          return i.reply({
-            content: "Kamu tidak punya akses untuk order ini.",
-            ephemeral: true,
-          });
-        }
-
-        if (order.midtransOrderId || (order.paymentMethod === "MIDTRANS_QRIS" && !isLegacySeaBankOrder(order))) {
           return i.reply({
             content:
               "📱 Metode pembayaran order ini sudah dikunci ke **QRIS**. " +
@@ -3200,7 +3169,7 @@ export function setupOrderRobux(discordClient) {
 
         await i.channel
           .send(
-            `📌 Setelah transfer, kirim **bukti pembayaran (file apapun / gambar / dokumen / forward)** di sini. ` +
+            `📌 Setelah transfer, kirim **bukti pembayaran (file/gambar/dokumen/forward)** di sini. ` +
               `Jika dalam **${AUTO_CLOSE_MINUTES} menit** tidak kirim bukti pembayaran, order akan di close otomatis.`
           )
           .catch(() => {});
@@ -3228,8 +3197,6 @@ export function setupOrderRobux(discordClient) {
             ephemeral: true,
           });
         }
-
-        await cancelMidtransPending(order);
 
         order.status = "CANCELLED";
         order.cancelledAt = nowIso();
