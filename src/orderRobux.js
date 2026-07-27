@@ -44,10 +44,10 @@ const SEABANK_NAME = process.env.SEABANK_NAME || "ISI_NAMA_REKENING";
 // ShopeePay Merchant QRIS Statis
 // Simpan gambar QRIS asli merchant pada path ini. Tidak memerlukan API/webhook.
 const QRIS_STATIC_IMAGE_PATH = path.resolve(
-  String(process.env.QRIS_STATIC_IMAGE_PATH || "./assets/qris-shopeepay-static.png").trim()
+  String(process.env.QRIS_STATIC_IMAGE_PATH || "./assets/qris-shopeepay.png").trim()
 );
 const QRIS_STATIC_MERCHANT_NAME = String(
-  process.env.QRIS_STATIC_MERCHANT_NAME || "ShopeePay Merchant"
+  process.env.QRIS_STATIC_MERCHANT_NAME || "UNDERCOVER"
 ).trim();
 
 const ELIGIBLE_DAYS = Number(process.env.ELIGIBLE_DAYS || 14);
@@ -238,7 +238,7 @@ function isAnyPaymentMethodAvailable() {
 function getEnabledPaymentMethodLabels() {
   const methods = [];
   if (isSeaBankEnabled()) methods.push("Transfer SeaBank");
-  if (isQrisAvailable()) methods.push("QRIS ShopeePay Merchant");
+  if (isQrisAvailable()) methods.push("QRIS");
   return methods;
 }
 
@@ -528,10 +528,10 @@ function getPaymentTotal(order) {
 
 function getPaymentMethodLabel(order) {
   if (order?.paymentMethod === "SHOPEEPAY_QRIS_STATIC") {
-    return "QRIS Statis (ShopeePay Merchant)";
+    return "QRIS Statis";
   }
   if (order?.paymentMethod === "SHOPEEPAY_QRIS") {
-    return "QRIS Dinamis (ShopeePay Merchant - legacy)";
+    return "QRIS Dinamis";
   }
   if (order?.paymentMethod === "MIDTRANS_QRIS") return "QRIS (Midtrans - legacy)";
   if (order?.paymentMethod === "SEABANK_TRANSFER" || isLegacySeaBankOrder(order)) {
@@ -555,7 +555,7 @@ function isStaticQrisConfigured() {
 
 function getStaticQrisAttachmentName() {
   const ext = path.extname(QRIS_STATIC_IMAGE_PATH).toLowerCase() || ".png";
-  return `qris-shopeepay-static${ext}`;
+  return `qris-shopeepay${ext}`;
 }
 
 function buildQrisStaticEmbed(order) {
@@ -564,7 +564,7 @@ function buildQrisStaticEmbed(order) {
   const total = getQrisTotal(order);
 
   return new EmbedBuilder()
-    .setTitle("🟠 PEMBAYARAN QRIS SHOPEEPAY MERCHANT")
+    .setTitle("🟠 PEMBAYARAN QRIS")
     .setDescription(
       [
         `🧾 **Order:** ${order.orderId}`,
@@ -590,7 +590,7 @@ function buildQrisStaticEmbed(order) {
       ].join("\n")
     )
     .setColor(0xee4d2d)
-    .setFooter({ text: "UNDERCOVER — QRIS Statis ShopeePay Merchant" });
+    .setFooter({ text: "UNDERCOVER — QRIS Payment" });
 }
 
 function buildQrisStaticPayload(order) {
@@ -1121,10 +1121,10 @@ function buildPanelEmbed() {
           ? "• 🏦 **Transfer SeaBank** → transfer manual, upload bukti, lalu staff cek/proses"
           : "• 🏦 **Transfer SeaBank** → **NONAKTIF**",
         isQrisAvailable()
-          ? `• 🟠 **QRIS ShopeePay Merchant** → scan QR statis, biaya admin ${getQrisAdminPercent()}%, upload bukti, lalu staff cek/proses`
+          ? `• 🟠 **QRIS** → scan QR statis, biaya admin ${getQrisAdminPercent()}%, upload bukti, lalu staff cek/proses`
           : isQrisEnabled()
-            ? "• 🟠 **QRIS ShopeePay Merchant** → **BELUM TERSEDIA (gambar QRIS belum terpasang)**"
-            : "• 🟠 **QRIS ShopeePay Merchant** → **NONAKTIF**",
+            ? "• 🟠 **QRIS** → **BELUM TERSEDIA (gambar QRIS belum terpasang)**"
+            : "• 🟠 **QRIS** → **NONAKTIF**",
         "",
         "**Cara order (step by step)**",
         "1) Klik tombol **ORDER ROBUX** di bawah",
@@ -1288,8 +1288,8 @@ function buildCustomerStatusEmbed(order) {
           ? `🏦 **Transfer SeaBank:** Rp ${fmtIDR(getBankTotal(order))}`
           : "🏦 **Transfer SeaBank:** NONAKTIF",
         isQrisAvailable()
-          ? `🟠 **QRIS ShopeePay Merchant:** Rp ${fmtIDR(getQrisTotal(order))} *(termasuk admin ${getQrisAdminPercent()}%)*`
-          : "🟠 **QRIS ShopeePay Merchant:** NONAKTIF",
+          ? `🟠 **QRIS:** Rp ${fmtIDR(getQrisTotal(order))} *(termasuk admin ${getQrisAdminPercent()}%)*`
+          : "🟠 **QRIS:** NONAKTIF",
         "",
         "🏦 **SeaBank:** transfer sesuai nominal → upload bukti transfer → tunggu staff cek.",
         `📱 **QRIS:** scan QR statis → bayar total termasuk admin ${getQrisAdminPercent()}% → upload bukti → tunggu staff cek.`,
@@ -1630,12 +1630,51 @@ async function sendTestimoniMessage(client, order, staffUser) {
     }
 
     const customerUser = await client.users.fetch(order.userId).catch(() => null);
+    const isQris = order.paymentMethod === "SHOPEEPAY_QRIS_STATIC";
+    const proofAttachments = isQris && Array.isArray(order.proofAttachments)
+      ? order.proofAttachments.filter((attachment) => attachment?.url).slice(0, 10)
+      : [];
 
-    await channel.send({
-      content: "@everyone\n✨ **Testimoni order baru berhasil diproses!** ✨",
+    const payload = {
+      content:
+        "@everyone\n✨ **Testimoni order baru berhasil diproses!** ✨" +
+        (proofAttachments.length > 0
+          ? "\n📎 Bukti pembayaran QRIS dilampirkan bersama testimoni ini."
+          : ""),
       embeds: [buildTestimoniEmbed(order, customerUser, staffUser)],
       allowedMentions: { parse: ["everyone"] },
-    });
+    };
+
+    if (proofAttachments.length > 0) {
+      payload.files = proofAttachments.map((attachment, index) => ({
+        attachment: attachment.url,
+        name: attachment.name || `bukti-qris-${order.orderId}-${index + 1}`,
+      }));
+    }
+
+    try {
+      await channel.send(payload);
+    } catch (uploadError) {
+      // Testimoni tetap harus terkirim apabila Discord gagal mengambil ulang file bukti.
+      console.error(
+        `Failed to attach QRIS proof to final testimonial ${order.orderId}:`,
+        uploadError
+      );
+
+      const proofLinks = proofAttachments
+        .map((attachment, index) => `${index + 1}. ${attachment.url}`)
+        .join("\n");
+
+      await channel.send({
+        content:
+          "@everyone\n✨ **Testimoni order baru berhasil diproses!** ✨" +
+          (proofLinks
+            ? `\n📎 Discord gagal mengunggah ulang file bukti. Tautan bukti:\n${proofLinks}`
+            : ""),
+        embeds: [buildTestimoniEmbed(order, customerUser, staffUser)],
+        allowedMentions: { parse: ["everyone"] },
+      });
+    }
   } catch (e) {
     console.error("sendTestimoniMessage error:", e);
   }
@@ -2019,76 +2058,8 @@ function buildPaymentSettingsStatus() {
 
   return (
     `🏦 SeaBank: **${isSeaBankEnabled() ? "ENABLE" : "DISABLE"}**\n` +
-    `📱 QRIS ShopeePay: **${qrisDetail}**`
+    `📱 QRIS: **${qrisDetail}**`
   );
-}
-
-async function sendQrisProofToTestimonialChannel(client, order, sourceMessage) {
-  if (order.paymentMethod !== "SHOPEEPAY_QRIS_STATIC") return;
-
-  try {
-    const guild = await client.guilds.fetch(GUILD_ID);
-    const channel = await guild.channels.fetch(TESTIMONI_CHANNEL_ID);
-
-    if (
-      !channel ||
-      (channel.type !== ChannelType.GuildText &&
-        channel.type !== ChannelType.GuildAnnouncement)
-    ) {
-      console.error("TESTIMONI_CHANNEL_ID must be a text or announcement channel.");
-      return;
-    }
-
-    const sourceAttachments = Array.from(sourceMessage.attachments.values()).slice(0, 10);
-    if (sourceAttachments.length === 0) return;
-
-    const embed = new EmbedBuilder()
-      .setColor(0xee4d2d)
-      .setTitle("📎 BUKTI PEMBAYARAN QRIS MASUK")
-      .setDescription(
-        [
-          `👤 **Customer:** <@${order.userId}>`,
-          `🎮 **Username Roblox:** \`${order.robloxUsername}\``,
-          `💎 **Jumlah Robux:** ${fmtIDR(order.qty)} Robux`,
-          `💵 **Harga Robux:** Rp ${fmtIDR(getBankTotal(order))}`,
-          `🧾 **Biaya Admin ${getQrisAdminPercent()}%:** Rp ${fmtIDR(getQrisAdminFee(order))}`,
-          `💰 **Total Bayar:** Rp ${fmtIDR(getPaymentTotal(order))}`,
-          `🧾 **Order ID:** \`${order.orderId}\``,
-          "",
-          "⏳ Status: **Menunggu verifikasi staff**",
-        ].join("\n")
-      )
-      .setFooter({ text: "UNDERCOVER — Bukti QRIS" })
-      .setTimestamp();
-
-    const files = sourceAttachments.map((attachment, index) => ({
-      attachment: attachment.url,
-      name: attachment.name || `bukti-qris-${order.orderId}-${index + 1}`,
-    }));
-
-    try {
-      await channel.send({
-        content: `📱 Bukti pembayaran QRIS baru dari <@${order.userId}>`,
-        embeds: [embed],
-        files,
-        allowedMentions: { users: [order.userId] },
-      });
-    } catch (uploadError) {
-      console.error(`Failed to re-upload QRIS proof ${order.orderId}:`, uploadError);
-      const links = sourceAttachments
-        .map((attachment, index) => `${index + 1}. ${attachment.url}`)
-        .join("\n");
-
-      await channel.send({
-        content:
-          `📱 Bukti pembayaran QRIS baru dari <@${order.userId}>\n${links}`,
-        embeds: [embed],
-        allowedMentions: { users: [order.userId] },
-      });
-    }
-  } catch (error) {
-    console.error("sendQrisProofToTestimonialChannel error:", error);
-  }
 }
 
 export function setupOrderRobux(discordClient) {
@@ -2105,7 +2076,7 @@ export function setupOrderRobux(discordClient) {
         `⚠️ Gambar QRIS statis belum ditemukan. Tombol Bayar QRIS dinonaktifkan. Path: ${QRIS_STATIC_IMAGE_PATH}`
       );
     } else {
-      console.log(`✅ QRIS statis ShopeePay tersedia: ${QRIS_STATIC_IMAGE_PATH}`);
+      console.log(`✅ QRIS tersedia: ${QRIS_STATIC_IMAGE_PATH}`);
     }
 
     setInterval(() => runAutoCloseSweep(client), 60 * 1000).unref();
@@ -2180,7 +2151,7 @@ export function setupOrderRobux(discordClient) {
             .setRequired(true)
             .addChoices(
               { name: "SeaBank", value: "SEABANK" },
-              { name: "QRIS ShopeePay", value: "QRIS" },
+              { name: "QRIS", value: "QRIS" },
               { name: "Semua metode", value: "ALL" }
             )
         )
@@ -2196,7 +2167,7 @@ export function setupOrderRobux(discordClient) {
             .setRequired(true)
             .addChoices(
               { name: "SeaBank", value: "SEABANK" },
-              { name: "QRIS ShopeePay", value: "QRIS" },
+              { name: "QRIS", value: "QRIS" },
               { name: "Semua metode", value: "ALL" }
             )
         )
@@ -2280,10 +2251,6 @@ export function setupOrderRobux(discordClient) {
 
         await syncStockAndPanel(client).catch(() => {});
 
-        if (selectedMethod === "SHOPEEPAY_QRIS_STATIC") {
-          await sendQrisProofToTestimonialChannel(client, order, msg);
-        }
-
         await msg.channel
           .send(
             `✅ Bukti pembayaran **${getPaymentMethodLabel(order)}** diterima dari <@${order.userId}>.\n` +
@@ -2323,7 +2290,7 @@ export function setupOrderRobux(discordClient) {
           method === "SEABANK"
             ? "SeaBank"
             : method === "QRIS"
-              ? "QRIS ShopeePay"
+              ? "QRIS"
               : "semua metode pembayaran";
 
         const qrisWarning =
