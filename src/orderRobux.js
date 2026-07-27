@@ -528,10 +528,10 @@ function getPaymentTotal(order) {
 
 function getPaymentMethodLabel(order) {
   if (order?.paymentMethod === "SHOPEEPAY_QRIS_STATIC") {
-    return "QRIS Statis";
+    return "QRIS";
   }
   if (order?.paymentMethod === "SHOPEEPAY_QRIS") {
-    return "QRIS Dinamis";
+    return "QRIS";
   }
   if (order?.paymentMethod === "MIDTRANS_QRIS") return "QRIS (Midtrans - legacy)";
   if (order?.paymentMethod === "SEABANK_TRANSFER" || isLegacySeaBankOrder(order)) {
@@ -1639,7 +1639,7 @@ async function sendTestimoniMessage(client, order, staffUser) {
       content:
         "@everyone\n✨ **Testimoni order baru berhasil diproses!** ✨" +
         (proofAttachments.length > 0
-          ? "\n📎 Bukti pembayaran QRIS dilampirkan bersama testimoni ini."
+          ? "\n📎 Bukti pembayaran QRIS Order Robux - UNDERCOVER."
           : ""),
       embeds: [buildTestimoniEmbed(order, customerUser, staffUser)],
       allowedMentions: { parse: ["everyone"] },
