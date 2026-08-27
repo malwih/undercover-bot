@@ -71,85 +71,24 @@ if (!ROBLOX_COOKIE) throw new Error("Missing ROBLOX_COOKIE (.ROBLOSECURITY)");
 
 // ========= STORAGE =========
 const DATA_FILE = path.resolve("./orders.json");
-const TAG_SETTINGS_FILE = path.resolve("./tag_settings.json");
 const ORDER_SETTINGS_FILE = path.resolve("./order_settings.json");
 const PAYMENT_SETTINGS_FILE = path.resolve("./payment_settings.json");
 
 /** @type {Map<string, any>} */
 const orders = new Map();
 
-let tagSettings = {
-  enabled: true,
-  keyword: "UCVR",
-};
-
 let orderSettings = {
   open: true,
+  minOrderQty: null,
+  stockMode: "AUTO",
+  manualStockTotal: null,
 };
 
 let paymentSettings = {
   seabankEnabled: true,
   qrisEnabled: true,
+  qrisBagibagiEnabled: true,
 };
-
-// ========= TAG SETTINGS =========
-function normalizeTagKeyword(keyword) {
-  return String(keyword || "")
-    .trim()
-    .replace(/\s+/g, "")
-    .replace(/[^a-zA-Z0-9_-]/g, "");
-}
-
-function loadTagSettings() {
-  try {
-    if (!fs.existsSync(TAG_SETTINGS_FILE)) {
-      saveTagSettings();
-      return;
-    }
-
-    const raw = fs.readFileSync(TAG_SETTINGS_FILE, "utf-8");
-    const json = JSON.parse(raw);
-
-    tagSettings = {
-      enabled: typeof json.enabled === "boolean" ? json.enabled : true,
-      keyword: normalizeTagKeyword(json.keyword || "UCVR") || "UCVR",
-    };
-
-    saveTagSettings();
-  } catch (e) {
-    console.error("Failed to load tag_settings.json:", e);
-    tagSettings = {
-      enabled: true,
-      keyword: "UCVR",
-    };
-    saveTagSettings();
-  }
-}
-
-function saveTagSettings() {
-  try {
-    fs.writeFileSync(TAG_SETTINGS_FILE, JSON.stringify(tagSettings, null, 2));
-  } catch (e) {
-    console.error("Failed to save tag_settings.json:", e);
-  }
-}
-
-function getTagKeywordUpper() {
-  return String(tagSettings.keyword || "UCVR").toUpperCase();
-}
-
-function getTagKeywordLower() {
-  return String(tagSettings.keyword || "ucvr").toLowerCase();
-}
-
-function displayNameHasRequiredTag(displayName) {
-  if (!tagSettings.enabled) return true;
-
-  const name = String(displayName || "").toLowerCase();
-  const keyword = getTagKeywordLower();
-
-  return name.includes(keyword);
-}
 
 // ========= ORDER OPEN/CLOSE SETTINGS =========
 function loadOrderSettings() {
@@ -162,14 +101,31 @@ function loadOrderSettings() {
     const raw = fs.readFileSync(ORDER_SETTINGS_FILE, "utf-8");
     const json = JSON.parse(raw);
 
+    const minOrderQty = Number(json.minOrderQty);
+    const manualStockTotal = Number(json.manualStockTotal);
+
     orderSettings = {
       open: typeof json.open === "boolean" ? json.open : true,
+      minOrderQty:
+        Number.isFinite(minOrderQty) && minOrderQty >= 1000 && minOrderQty % 1000 === 0
+          ? Math.floor(minOrderQty)
+          : null,
+      stockMode: json.stockMode === "MANUAL" ? "MANUAL" : "AUTO",
+      manualStockTotal:
+        Number.isFinite(manualStockTotal) && manualStockTotal >= 0
+          ? Math.floor(manualStockTotal)
+          : null,
     };
 
     saveOrderSettings();
   } catch (e) {
     console.error("Failed to load order_settings.json:", e);
-    orderSettings = { open: true };
+    orderSettings = {
+      open: true,
+      minOrderQty: null,
+      stockMode: "AUTO",
+      manualStockTotal: null,
+    };
     saveOrderSettings();
   }
 }
@@ -184,6 +140,19 @@ function saveOrderSettings() {
 
 function isOrderOpen() {
   return orderSettings.open === true;
+}
+
+function getConfiguredMinOrderQty() {
+  const qty = Number(orderSettings.minOrderQty);
+  return Number.isFinite(qty) && qty >= 1000 && qty % 1000 === 0 ? Math.floor(qty) : null;
+}
+
+function isManualStockMode() {
+  return orderSettings.stockMode === "MANUAL";
+}
+
+function getStockModeLabel() {
+  return isManualStockMode() ? "MANUAL" : "OTOMATIS (Community Payout)";
 }
 
 // ========= PAYMENT METHOD SETTINGS =========
@@ -201,12 +170,18 @@ function loadPaymentSettings() {
       seabankEnabled:
         typeof json.seabankEnabled === "boolean" ? json.seabankEnabled : true,
       qrisEnabled: typeof json.qrisEnabled === "boolean" ? json.qrisEnabled : true,
+      qrisBagibagiEnabled:
+        typeof json.qrisBagibagiEnabled === "boolean" ? json.qrisBagibagiEnabled : true,
     };
 
     savePaymentSettings();
   } catch (e) {
     console.error("Failed to load payment_settings.json:", e);
-    paymentSettings = { seabankEnabled: true, qrisEnabled: true };
+    paymentSettings = {
+      seabankEnabled: true,
+      qrisEnabled: true,
+      qrisBagibagiEnabled: true,
+    };
     savePaymentSettings();
   }
 }
@@ -227,18 +202,23 @@ function isQrisEnabled() {
   return paymentSettings.qrisEnabled === true;
 }
 
+function isQrisBagibagiEnabled() {
+  return paymentSettings.qrisBagibagiEnabled === true;
+}
+
 function isQrisAvailable() {
   return isQrisEnabled() && isStaticQrisConfigured();
 }
 
 function isAnyPaymentMethodAvailable() {
-  return isSeaBankEnabled() || isQrisAvailable();
+  return isSeaBankEnabled() || isQrisAvailable() || isQrisBagibagiEnabled();
 }
 
 function getEnabledPaymentMethodLabels() {
   const methods = [];
   if (isSeaBankEnabled()) methods.push("Transfer SeaBank");
-  if (isQrisAvailable()) methods.push("QRIS");
+  if (isQrisAvailable()) methods.push("QRIS Statis");
+  if (isQrisBagibagiEnabled()) methods.push("QRIS BagiBagi");
   return methods;
 }
 
@@ -251,25 +231,6 @@ function buildPaymentChoicePrompt(userId) {
   return (
     `Halo <@${userId}> 👋\nBerikut detail order kamu. Silakan pilih **${methods.join("** atau **")}** melalui tombol di bawah.`
   );
-}
-
-function buildTagExamples(name = "DisplayName") {
-  const tagUpper = getTagKeywordUpper();
-  const tagLower = getTagKeywordLower();
-
-  const cleanName =
-    String(name || "DisplayName")
-      .trim()
-      .replace(/\s+/g, "")
-      .replace(/[^a-zA-Z0-9_-]/g, "") || "DisplayName";
-
-  return {
-    examples: [
-      `${tagUpper}_${cleanName}`,
-      `${tagUpper}x${cleanName}`,
-      `${tagLower}${cleanName}`,
-    ],
-  };
 }
 
 // ========= ORDER CREATION LOCK =========
@@ -502,7 +463,7 @@ function getQrisTotal(order) {
 function isLegacySeaBankOrder(order) {
   return (
     ["AWAITING_PROOF", "PROOF_SUBMITTED"].includes(order?.status) &&
-    !["SHOPEEPAY_QRIS_STATIC", "SHOPEEPAY_QRIS", "MIDTRANS_QRIS"].includes(
+    !["SHOPEEPAY_QRIS_STATIC", "BAGIBAGI_QRIS", "SHOPEEPAY_QRIS", "MIDTRANS_QRIS"].includes(
       order?.paymentMethod
     )
   );
@@ -513,6 +474,7 @@ function getPaymentTotal(order) {
   if (Number.isFinite(explicit) && explicit > 0) return Math.round(explicit);
 
   if (order?.paymentMethod === "SHOPEEPAY_QRIS_STATIC") return getQrisTotal(order);
+  if (order?.paymentMethod === "BAGIBAGI_QRIS") return getBankTotal(order);
   if (["SHOPEEPAY_QRIS", "MIDTRANS_QRIS"].includes(order?.paymentMethod)) {
     return getQrisTotal(order);
   }
@@ -528,7 +490,10 @@ function getPaymentTotal(order) {
 
 function getPaymentMethodLabel(order) {
   if (order?.paymentMethod === "SHOPEEPAY_QRIS_STATIC") {
-    return "QRIS";
+    return "QRIS Statis";
+  }
+  if (order?.paymentMethod === "BAGIBAGI_QRIS") {
+    return "QRIS BagiBagi";
   }
   if (order?.paymentMethod === "SHOPEEPAY_QRIS") {
     return "QRIS";
@@ -783,31 +748,6 @@ async function checkRobloxGroupEligibility(username) {
   const displayName = userInfo?.displayName || usernameLookup?.displayName || clean;
   const realUsername = userInfo?.name || usernameLookup?.name || clean;
 
-  if (tagSettings.enabled && !displayNameHasRequiredTag(displayName)) {
-    const tagUpper = getTagKeywordUpper();
-
-    return {
-      ok: false,
-      failType: "TAG_MISSING",
-      reason:
-        `Display Name Roblox kamu belum mencantumkan tag map **${tagUpper}**.\n` +
-        `Silakan ubah Display Name Roblox kamu terlebih dahulu.\n\n` +
-        `Contoh Display Name yang benar:\n` +
-        `• ${buildTagExamples(displayName).examples[0]}\n` +
-        `• ${buildTagExamples(displayName).examples[1]}\n` +
-        `• ${buildTagExamples(displayName).examples[2]}`,
-      userId,
-      robloxUsername: realUsername,
-      robloxDisplayName: displayName,
-      joinTime: null,
-      daysInGroup: 0,
-      isMember: false,
-      tagKeyword: tagSettings.keyword,
-      tagRequired: true,
-      tagValid: false,
-    };
-  }
-
   const membership = await robloxGetGroupMembershipForUser(ROBLOX_GROUP_ID, userId);
 
   if (!membership) {
@@ -821,9 +761,6 @@ async function checkRobloxGroupEligibility(username) {
       joinTime: null,
       daysInGroup: 0,
       isMember: false,
-      tagKeyword: tagSettings.keyword,
-      tagRequired: tagSettings.enabled,
-      tagValid: true,
     };
   }
 
@@ -840,9 +777,6 @@ async function checkRobloxGroupEligibility(username) {
       joinTime: null,
       daysInGroup: null,
       isMember: true,
-      tagKeyword: tagSettings.keyword,
-      tagRequired: tagSettings.enabled,
-      tagValid: true,
     };
   }
 
@@ -862,9 +796,6 @@ async function checkRobloxGroupEligibility(username) {
     joinTime: joinTimeIso,
     daysInGroup,
     isMember: true,
-    tagKeyword: tagSettings.keyword,
-    tagRequired: tagSettings.enabled,
-    tagValid: true,
   };
 }
 
@@ -903,6 +834,7 @@ function computeReservedRobux() {
 
     const lockingStatuses = new Set([
       "AWAITING_PAYMENT",
+      "AWAITING_BAGIBAGI_QRIS",
       "AWAITING_PROOF",
       "PROOF_SUBMITTED",
       "QRIS_PENDING",
@@ -919,6 +851,7 @@ function computeReservedRobux() {
 
 let stockCache = {
   ok: false,
+  source: "AUTO",
   groupFunds: 0,
   reserved: 0,
   available: 0,
@@ -934,14 +867,33 @@ const stockBroadcastState = {
 
 async function refreshStockCache() {
   const previous = { ...stockCache };
+  const reserved = computeReservedRobux();
+
+  if (isManualStockMode()) {
+    const manualTotal = Number(orderSettings.manualStockTotal);
+    const safeTotal = Number.isFinite(manualTotal) && manualTotal >= 0 ? Math.floor(manualTotal) : 0;
+    const available = Math.max(0, Math.floor(safeTotal - reserved));
+
+    stockCache = {
+      ok: true,
+      source: "MANUAL",
+      groupFunds: safeTotal,
+      reserved,
+      available,
+      updatedAt: nowIso(),
+      error: null,
+    };
+
+    return { previous, current: { ...stockCache } };
+  }
 
   try {
     const groupFunds = await robloxGetGroupFunds(ROBLOX_GROUP_ID);
-    const reserved = computeReservedRobux();
     const available = Math.max(0, Math.floor(groupFunds - reserved));
 
     stockCache = {
       ok: true,
+      source: "AUTO",
       groupFunds,
       reserved,
       available,
@@ -951,6 +903,7 @@ async function refreshStockCache() {
   } catch (e) {
     stockCache = {
       ...stockCache,
+      source: "AUTO",
       ok: false,
       updatedAt: nowIso(),
       error: String(e?.message || e),
@@ -963,12 +916,27 @@ async function refreshStockCache() {
   };
 }
 
+function consumeManualStockForCompletedOrder(order) {
+  if (!isManualStockMode() || order?.manualStockConsumed === true) return;
+
+  const qty = Math.max(0, Math.floor(Number(order?.qty || 0)));
+  const currentTotal = Math.max(0, Math.floor(Number(orderSettings.manualStockTotal || 0)));
+
+  orderSettings.manualStockTotal = Math.max(0, currentTotal - qty);
+  order.manualStockConsumed = true;
+  saveOrderSettings();
+}
+
+function getMinimumProcessableQty() {
+  return getConfiguredMinOrderQty() || 1000;
+}
+
 function isStockReady() {
-  return Number(stockCache?.available || 0) >= 1000;
+  return Number(stockCache?.available || 0) >= getMinimumProcessableQty();
 }
 
 function getStockBroadcastMode(available) {
-  return Number(available || 0) >= 1000 ? "READY" : "OUT";
+  return Number(available || 0) >= getMinimumProcessableQty() ? "READY" : "OUT";
 }
 
 // ========= INVOICE PDF =========
@@ -1083,18 +1051,8 @@ function buildPanelEmbed() {
   const stockWarn = "";
 
   const stockMeta = stockCache.ok
-    ? `\n_Updated: ${fmtDateID(stockCache.updatedAt)} WIB_`
-    : `\n_Updated: ${fmtDateID(stockCache.updatedAt)} WIB | Error: ${stockCache.error}_`;
-
-  const tagKeyword = getTagKeywordUpper();
-  const tagExample = buildTagExamples("DisplayName");
-
-  const tagRequirementLine = tagSettings.enabled
-    ? [
-        `• Wajib Display Name Roblox mencantumkan tag map **${tagKeyword}**`,
-        `• Contoh Display Name: **${tagExample.examples[0]}**, **${tagExample.examples[1]}**, **${tagExample.examples[2]}**`,
-      ]
-    : ["• Syarat tag map di Display Name Roblox sedang **OFF**"];
+    ? `\n_Mode stok: ${getStockModeLabel()} | Updated: ${fmtDateID(stockCache.updatedAt)} WIB_`
+    : `\n_Mode stok: ${getStockModeLabel()} | Updated: ${fmtDateID(stockCache.updatedAt)} WIB | Error: ${stockCache.error}_`;
 
   return new EmbedBuilder()
     .setTitle("💸ORDER ROBUX — VIA COMMUNITY PAYOUT")
@@ -1104,7 +1062,9 @@ function buildPanelEmbed() {
         "",
         "**Syarat sebelum order**",
         `• Wajib join komunitas Roblox minimal **${ELIGIBLE_DAYS} hari**`,
-        ...tagRequirementLine,
+        getConfiguredMinOrderQty()
+          ? `• Minimum order saat ini **${fmtIDR(getConfiguredMinOrderQty())} Robux**`
+          : "• Minimum order khusus: **tidak diatur** (tetap kelipatan 1.000 Robux)",
         "• Link komunitas: https://www.roblox.com/share/g/819348691",
         "",
         "💰 **RATE ROBUX**",
@@ -1114,29 +1074,30 @@ function buildPanelEmbed() {
         `💎 4.000 Robux = Rp ${fmtIDR(PRICE_PER_1000 * 4)}`,
         `💎 5.000 Robux = Rp ${fmtIDR(PRICE_PER_1000 * 5)}`,
         "➡️ dan seterusnya (kelipatan 1.000)",
-        `ℹ️ Pembayaran QRIS dikenakan biaya admin **${getQrisAdminPercent()}%**.`,
+        `ℹ️ Pembayaran QRIS Statis dikenakan biaya admin **${getQrisAdminPercent()}%**.`,
         "",
         "💳 **METODE PEMBAYARAN**",
         isSeaBankEnabled()
           ? "• 🏦 **Transfer SeaBank** → transfer manual, upload bukti, lalu staff cek/proses"
           : "• 🏦 **Transfer SeaBank** → **NONAKTIF**",
         isQrisAvailable()
-          ? `• 🟠 **QRIS** → scan QR statis, biaya admin ${getQrisAdminPercent()}%, upload bukti, lalu staff cek/proses`
+          ? `• 🟠 **QRIS Statis** → scan QR statis, biaya admin ${getQrisAdminPercent()}%, upload bukti, lalu staff cek/proses`
           : isQrisEnabled()
-            ? "• 🟠 **QRIS** → **BELUM TERSEDIA (gambar QRIS belum terpasang)**"
-            : "• 🟠 **QRIS** → **NONAKTIF**",
+            ? "• 🟠 **QRIS Statis** → **BELUM TERSEDIA (gambar QRIS belum terpasang)**"
+            : "• 🟠 **QRIS Statis** → **NONAKTIF**",
+        isQrisBagibagiEnabled()
+          ? `• 🟣 **QRIS BagiBagi** → customer menunggu QRIS dibuat Owner/Staff, lalu bayar dan upload bukti`
+          : "• 🟣 **QRIS BagiBagi** → **NONAKTIF**",
         "",
         "**Cara order (step by step)**",
         "1) Klik tombol **ORDER ROBUX** di bawah",
         "2) Isi **Username Roblox** & **Jumlah**",
         "3) Bot cek join komunitas Roblox",
-        tagSettings.enabled
-          ? `4) Bot cek Display Name Roblox wajib ada tag **${tagKeyword}**`
-          : "4) Bot cek data Roblox",
-        "5) Ticket dibuat otomatis jika memenuhi pengecekan awal",
-        "6) Pilih metode pembayaran yang sedang aktif",
-        "7) SeaBank: transfer → upload bukti → staff cek",
-        `8) QRIS: scan QR statis → bayar harga + admin ${getQrisAdminPercent()}% → upload bukti → staff cek`,
+        "4) Ticket dibuat otomatis jika memenuhi pengecekan awal",
+        "5) Pilih metode pembayaran yang sedang aktif",
+        "6) SeaBank: transfer → upload bukti → staff cek",
+        `7) QRIS Statis: scan QR → bayar harga + admin ${getQrisAdminPercent()}% → upload bukti → staff cek`,
+        "8) QRIS BagiBagi: tunggu Owner/Staff mengirim QRIS → bayar → upload bukti",
         "9) Setelah pembayaran valid, staff melanjutkan pengiriman Robux",
         "",
         "⚠️ **Metode pembayaran terkunci setelah dipilih. Jika salah pilih, close order lalu buat order baru.**",
@@ -1236,7 +1197,11 @@ function buildOrderModal() {
 
   const qty = new TextInputBuilder()
     .setCustomId("qty")
-    .setLabel("Jumlah (min. 1000 dan kelipatan 1000)")
+    .setLabel(
+      getConfiguredMinOrderQty()
+        ? `Jumlah Robux (min ${fmtIDR(getConfiguredMinOrderQty())}; x1000)`
+        : "Jumlah Robux (kelipatan 1000)"
+    )
     .setStyle(TextInputStyle.Short)
     .setRequired(true);
 
@@ -1263,21 +1228,12 @@ function buildCustomerStatusEmbed(order) {
     ? `✅ Eligible — **${days}/${ELIGIBLE_DAYS} hari**`
     : `❌ Tidak eligible — **${days}/${ELIGIBLE_DAYS} hari**`;
 
-  const tagUpper = String(order.tagKeyword || tagSettings.keyword || "UCVR").toUpperCase();
-
-  const tagLine = order.tagRequired
-    ? order.tagValid
-      ? `✅ Display Name mengandung tag **${tagUpper}**`
-      : `❌ Display Name belum mengandung tag **${tagUpper}**`
-    : "ℹ️ Syarat tag map sedang OFF";
-
   const desc = order.robloxEligible
     ? [
         `👤 **Username Roblox:** \`${order.robloxUsername}\``,
         `🏷️ **Display Name:** \`${order.robloxDisplayName || "-"}\``,
         "",
         `📊 **Status Join Community:** ${eligibleLine}`,
-        `🏷️ **Status Tag Map:** ${tagLine}`,
         `📅 **Tanggal Join:** ${joinLine}`,
         "",
         `💎 **Total Robux:** ${fmtIDR(order.qty)}`,
@@ -1288,11 +1244,15 @@ function buildCustomerStatusEmbed(order) {
           ? `🏦 **Transfer SeaBank:** Rp ${fmtIDR(getBankTotal(order))}`
           : "🏦 **Transfer SeaBank:** NONAKTIF",
         isQrisAvailable()
-          ? `🟠 **QRIS:** Rp ${fmtIDR(getQrisTotal(order))} *(termasuk admin ${getQrisAdminPercent()}%)*`
-          : "🟠 **QRIS:** NONAKTIF",
+          ? `🟠 **QRIS Statis:** Rp ${fmtIDR(getQrisTotal(order))} *(termasuk admin ${getQrisAdminPercent()}%)*`
+          : "🟠 **QRIS Statis:** NONAKTIF",
+        isQrisBagibagiEnabled()
+          ? "🟣 **QRIS BagiBagi:** tunggu QRIS pembayaran dari Owner/Staff"
+          : "🟣 **QRIS BagiBagi:** NONAKTIF",
         "",
         "🏦 **SeaBank:** transfer sesuai nominal → upload bukti transfer → tunggu staff cek.",
-        `📱 **QRIS:** scan QR statis → bayar total termasuk admin ${getQrisAdminPercent()}% → upload bukti → tunggu staff cek.`,
+        `📱 **QRIS Statis:** scan QR statis → bayar total termasuk admin ${getQrisAdminPercent()}% → upload bukti → tunggu staff cek.`,
+        "🟣 **QRIS BagiBagi:** setelah dipilih, tunggu Owner/Staff mengirim QRIS pembayaran di ticket.",
         "",
         "⚠️ Setelah salah satu metode dipilih, metode pembayaran dikunci untuk order ini.",
       ].join("\n")
@@ -1301,7 +1261,6 @@ function buildCustomerStatusEmbed(order) {
         `🏷️ **Display Name:** \`${order.robloxDisplayName || "-"}\``,
         "",
         `📊 **Status Join Community:** ${eligibleLine}`,
-        `🏷️ **Status Tag Map:** ${tagLine}`,
         `📅 **Tanggal Join:** ${joinLine}`,
         "",
         `⚠️ **Alasan:** ${order.ineligibleReason || "Belum memenuhi syarat."}`,
@@ -1333,8 +1292,17 @@ function buildCustomerButtonsEligible(orderId) {
     paymentButtons.push(
       new ButtonBuilder()
         .setCustomId(`ob_qris:${orderId}`)
-        .setLabel(`📱 Bayar QRIS (+${getQrisAdminPercent()}%)`)
+        .setLabel(`📱 QRIS Statis (+${getQrisAdminPercent()}%)`)
         .setStyle(ButtonStyle.Success)
+    );
+  }
+
+  if (isQrisBagibagiEnabled()) {
+    paymentButtons.push(
+      new ButtonBuilder()
+        .setCustomId(`ob_qris_bagibagi:${orderId}`)
+        .setLabel("🟣 QRIS BagiBagi")
+        .setStyle(ButtonStyle.Secondary)
     );
   }
 
@@ -1630,7 +1598,7 @@ async function sendTestimoniMessage(client, order, staffUser) {
     }
 
     const customerUser = await client.users.fetch(order.userId).catch(() => null);
-    const isQris = order.paymentMethod === "SHOPEEPAY_QRIS_STATIC";
+    const isQris = ["SHOPEEPAY_QRIS_STATIC", "BAGIBAGI_QRIS"].includes(order.paymentMethod);
     const proofAttachments = isQris && Array.isArray(order.proofAttachments)
       ? order.proofAttachments.filter((attachment) => attachment?.url).slice(0, 10)
       : [];
@@ -1998,6 +1966,7 @@ async function findPaymentChoiceMessage(channel, order) {
           [
             `ob_bank:${order.orderId}`,
             `ob_qris:${order.orderId}`,
+            `ob_qris_bagibagi:${order.orderId}`,
             `ob_cancel_user:${order.orderId}`,
           ].includes(component.customId)
         )
@@ -2046,6 +2015,9 @@ function setPaymentMethodEnabled(method, enabled) {
   if (method === "QRIS" || method === "ALL") {
     paymentSettings.qrisEnabled = enabled;
   }
+  if (method === "QRIS_BAGIBAGI" || method === "ALL") {
+    paymentSettings.qrisBagibagiEnabled = enabled;
+  }
   savePaymentSettings();
 }
 
@@ -2058,14 +2030,14 @@ function buildPaymentSettingsStatus() {
 
   return (
     `🏦 SeaBank: **${isSeaBankEnabled() ? "ENABLE" : "DISABLE"}**\n` +
-    `📱 QRIS: **${qrisDetail}**`
+    `📱 QRIS Statis: **${qrisDetail}**\n` +
+    `🟣 QRIS BagiBagi: **${isQrisBagibagiEnabled() ? "ENABLE" : "DISABLE"}**`
   );
 }
 
 export function setupOrderRobux(discordClient) {
   client = discordClient;
   loadOrders();
-  loadTagSettings();
   loadOrderSettings();
   loadPaymentSettings();
   client.once("ready", async () => {
@@ -2103,29 +2075,6 @@ export function setupOrderRobux(discordClient) {
         .toJSON(),
 
       new SlashCommandBuilder()
-        .setName("tagmap")
-        .setDescription("Staff: atur wajib tag map di Display Name Roblox")
-        .addStringOption((option) =>
-          option
-            .setName("aksi")
-            .setDescription("Pilih aksi")
-            .setRequired(true)
-            .addChoices(
-              { name: "status", value: "STATUS" },
-              { name: "aktifkan", value: "AKTIFKAN" },
-              { name: "matikan", value: "MATIKAN" },
-              { name: "ganti keyword", value: "GANTI" }
-            )
-        )
-        .addStringOption((option) =>
-          option
-            .setName("keyword")
-            .setDescription("Keyword baru, contoh: UCVR / ADBM")
-            .setRequired(false)
-        )
-        .toJSON(),
-
-      new SlashCommandBuilder()
         .setName("order")
         .setDescription("Staff: buka/tutup order Robux manual")
         .addStringOption((option) =>
@@ -2151,7 +2100,8 @@ export function setupOrderRobux(discordClient) {
             .setRequired(true)
             .addChoices(
               { name: "SeaBank", value: "SEABANK" },
-              { name: "QRIS", value: "QRIS" },
+              { name: "QRIS Statis", value: "QRIS" },
+              { name: "QRIS BagiBagi", value: "QRIS_BAGIBAGI" },
               { name: "Semua metode", value: "ALL" }
             )
         )
@@ -2167,14 +2117,72 @@ export function setupOrderRobux(discordClient) {
             .setRequired(true)
             .addChoices(
               { name: "SeaBank", value: "SEABANK" },
-              { name: "QRIS", value: "QRIS" },
+              { name: "QRIS Statis", value: "QRIS" },
+              { name: "QRIS BagiBagi", value: "QRIS_BAGIBAGI" },
               { name: "Semua metode", value: "ALL" }
             )
         )
         .toJSON(),
+
+      new SlashCommandBuilder()
+        .setName("minimalorder")
+        .setDescription("Staff: atur minimal order Robux")
+        .addStringOption((option) =>
+          option
+            .setName("aksi")
+            .setDescription("Pilih aksi")
+            .setRequired(true)
+            .addChoices(
+              { name: "status", value: "STATUS" },
+              { name: "set", value: "SET" },
+              { name: "hapus minimum", value: "HAPUS" }
+            )
+        )
+        .addIntegerOption((option) =>
+          option
+            .setName("jumlah")
+            .setDescription("Minimal Robux, contoh 2000 (kelipatan 1000)")
+            .setRequired(false)
+            .setMinValue(1000)
+        )
+        .toJSON(),
+
+      new SlashCommandBuilder()
+        .setName("stokrobux")
+        .setDescription("Staff: pilih stok otomatis atau set stok manual")
+        .addStringOption((option) =>
+          option
+            .setName("aksi")
+            .setDescription("Pilih mode/aksi stok")
+            .setRequired(true)
+            .addChoices(
+              { name: "status", value: "STATUS" },
+              { name: "otomatis (Community Payout)", value: "AUTO" },
+              { name: "manual", value: "MANUAL" }
+            )
+        )
+        .addIntegerOption((option) =>
+          option
+            .setName("jumlah")
+            .setDescription("Stok tersedia saat mode manual")
+            .setRequired(false)
+            .setMinValue(0)
+        )
+        .toJSON(),
     ]);
 
-    console.log("Slash commands /proses, /tagmap, /order, /enable, and /disable registered.");
+    // Hapus command lama /tagmap dari versi sebelumnya agar syarat nama/tag UCVR tidak bisa diaktifkan lagi.
+    const legacyCommands = await guild.commands.fetch();
+    const legacyTagMapCommand = legacyCommands.find((cmd) => cmd.name === "tagmap");
+    if (legacyTagMapCommand) {
+      await guild.commands.delete(legacyTagMapCommand.id).catch((e) =>
+        console.error("Failed to remove legacy /tagmap command:", e)
+      );
+    }
+
+    console.log(
+      "Slash commands /proses, /order, /enable, /disable, /minimalorder, and /stokrobux registered."
+    );
 
     // Sinkronkan stok/panel saat startup tanpa broadcast restart/redeploy.
     await syncStockAndPanel(client, { suppressBroadcast: true });
@@ -2217,14 +2225,33 @@ export function setupOrderRobux(discordClient) {
         saveOrders();
       }
 
+      const staffSentBagibagiQris =
+        order.status === "AWAITING_BAGIBAGI_QRIS" &&
+        !isCustomer &&
+        ((msg.attachments && msg.attachments.size > 0) ||
+          msg.embeds?.some((embed) => embed?.image?.url || embed?.thumbnail?.url) ||
+          /https?:\/\/\S+\.(?:png|jpe?g|webp)(?:\?\S*)?/i.test(msg.content || ""));
+
+      if (staffSentBagibagiQris) {
+        order.status = "AWAITING_PROOF";
+        order.bagibagiQrisSentAt = nowIso();
+        order.bagibagiQrisMessageId = msg.id;
+        setAutoCloseDeadline(order, AUTO_CLOSE_MINUTES, "bagibagi_qris_sent_by_staff");
+        orders.set(order.orderId, order);
+        saveOrders();
+        await syncStockAndPanel(client).catch(() => {});
+        return;
+      }
+
       if (order.status === "AWAITING_PROOF" && isCustomer) {
         const hasAnyAttachment = msg.attachments && msg.attachments.size > 0;
         if (!hasAnyAttachment) return;
 
-        const selectedMethod =
-          order.paymentMethod === "SHOPEEPAY_QRIS_STATIC"
-            ? "SHOPEEPAY_QRIS_STATIC"
-            : "SEABANK_TRANSFER";
+        const selectedMethod = ["SHOPEEPAY_QRIS_STATIC", "BAGIBAGI_QRIS"].includes(
+          order.paymentMethod
+        )
+          ? order.paymentMethod
+          : "SEABANK_TRANSFER";
         const paymentTotal = getPaymentTotal(order);
 
         order.status = "PROOF_SUBMITTED";
@@ -2290,8 +2317,10 @@ export function setupOrderRobux(discordClient) {
           method === "SEABANK"
             ? "SeaBank"
             : method === "QRIS"
-              ? "QRIS"
-              : "semua metode pembayaran";
+              ? "QRIS Statis"
+              : method === "QRIS_BAGIBAGI"
+                ? "QRIS BagiBagi"
+                : "semua metode pembayaran";
 
         const qrisWarning =
           enabled && (method === "QRIS" || method === "ALL") && !isStaticQrisConfigured()
@@ -2308,6 +2337,114 @@ export function setupOrderRobux(discordClient) {
         });
       }
 
+      if (i.isChatInputCommand() && i.commandName === "minimalorder") {
+        const member = await i.guild.members.fetch(i.user.id).catch(() => null);
+        if (!isStaff(member)) {
+          return i.reply({ content: "Khusus staff/owner.", ephemeral: true });
+        }
+
+        const aksi = i.options.getString("aksi", true);
+        const jumlah = i.options.getInteger("jumlah");
+
+        if (aksi === "STATUS") {
+          const min = getConfiguredMinOrderQty();
+          return i.reply({
+            content: min
+              ? `📏 Minimal order saat ini: **${fmtIDR(min)} Robux**.`
+              : "📏 Minimal order khusus saat ini: **KOSONG / TANPA MINIMUM TAMBAHAN**. Order tetap wajib kelipatan 1.000 Robux.",
+            ephemeral: true,
+          });
+        }
+
+        if (aksi === "HAPUS") {
+          orderSettings.minOrderQty = null;
+          saveOrderSettings();
+          await refreshPanelMessage(client).catch(() => {});
+          return i.reply({
+            content: "✅ Minimal order khusus sudah **DIHAPUS**. Sekarang tidak ada minimum tambahan; jumlah tetap kelipatan 1.000 Robux.",
+            ephemeral: true,
+          });
+        }
+
+        if (aksi === "SET") {
+          if (!Number.isInteger(jumlah) || jumlah < 1000 || jumlah % 1000 !== 0) {
+            return i.reply({
+              content: "❌ Isi `jumlah` dengan kelipatan 1.000. Contoh: 2000, 3000, 5000.",
+              ephemeral: true,
+            });
+          }
+
+          orderSettings.minOrderQty = jumlah;
+          saveOrderSettings();
+          await refreshPanelMessage(client).catch(() => {});
+          return i.reply({
+            content: `✅ Minimal order berhasil diset menjadi **${fmtIDR(jumlah)} Robux**.`,
+            ephemeral: true,
+          });
+        }
+
+        return i.reply({ content: "Aksi tidak valid.", ephemeral: true });
+      }
+
+      if (i.isChatInputCommand() && i.commandName === "stokrobux") {
+        const member = await i.guild.members.fetch(i.user.id).catch(() => null);
+        if (!isStaff(member)) {
+          return i.reply({ content: "Khusus staff/owner.", ephemeral: true });
+        }
+
+        const aksi = i.options.getString("aksi", true);
+        const jumlah = i.options.getInteger("jumlah");
+
+        if (aksi === "STATUS") {
+          await syncStockAndPanel(client, { suppressBroadcast: true }).catch(() => {});
+          return i.reply({
+            content:
+              `📦 **Status Stok Robux**\n` +
+              `Mode: **${getStockModeLabel()}**\n` +
+              `Stok tersedia: **${fmtIDR(stockCache.available)} Robux**\n` +
+              `Reserved order aktif: **${fmtIDR(stockCache.reserved)} Robux**`,
+            ephemeral: true,
+          });
+        }
+
+        if (aksi === "AUTO") {
+          orderSettings.stockMode = "AUTO";
+          orderSettings.manualStockTotal = null;
+          saveOrderSettings();
+          await syncStockAndPanel(client, { suppressBroadcast: true }).catch(() => {});
+          return i.reply({
+            content:
+              `✅ Mode stok diubah ke **OTOMATIS (Community Payout)**.\n` +
+              `Stok tersedia saat ini: **${stockCache.ok ? `${fmtIDR(stockCache.available)} Robux` : "gagal fetch"}**.`,
+            ephemeral: true,
+          });
+        }
+
+        if (aksi === "MANUAL") {
+          if (!Number.isInteger(jumlah) || jumlah < 0) {
+            return i.reply({
+              content: "❌ Untuk mode manual, isi `jumlah` stok Robux. Contoh: `/stokrobux aksi:manual jumlah:10000`.",
+              ephemeral: true,
+            });
+          }
+
+          const reserved = computeReservedRobux();
+          orderSettings.stockMode = "MANUAL";
+          // Simpan gross stock agar angka yang diinput tampil sebagai stok AVAILABLE saat command dijalankan.
+          orderSettings.manualStockTotal = jumlah + reserved;
+          saveOrderSettings();
+          await syncStockAndPanel(client, { suppressBroadcast: true }).catch(() => {});
+          return i.reply({
+            content:
+              `✅ Mode stok diubah ke **MANUAL**.\n` +
+              `Stok tersedia diset: **${fmtIDR(jumlah)} Robux**.`,
+            ephemeral: true,
+          });
+        }
+
+        return i.reply({ content: "Aksi tidak valid.", ephemeral: true });
+      }
+
       if (i.isChatInputCommand() && i.commandName === "order") {
         const member = await i.guild.members.fetch(i.user.id).catch(() => null);
 
@@ -2322,7 +2459,10 @@ export function setupOrderRobux(discordClient) {
             content:
               `📌 **Status Order Robux**\n` +
               `Order: **${isOrderOpen() ? "OPEN" : "CLOSE"}**\n` +
-              `Stok Roblox: **${stockCache.ok ? (isStockReady() ? "READY" : "HABIS") : "GAGAL FETCH"}**\n\n` +
+              `Stok Roblox: **${stockCache.ok ? (isStockReady() ? "READY" : "HABIS") : "GAGAL FETCH"}**\n` +
+              `Mode Stok: **${getStockModeLabel()}**\n` +
+              `Stok Tersedia: **${fmtIDR(stockCache.available)} Robux**\n` +
+              `Minimal Order: **${getConfiguredMinOrderQty() ? `${fmtIDR(getConfiguredMinOrderQty())} Robux` : "tidak diatur"}**\n\n` +
               buildPaymentSettingsStatus(),
             ephemeral: true,
           });
@@ -2352,85 +2492,6 @@ export function setupOrderRobux(discordClient) {
           return i.reply({
             content:
               "🔒 Order Robux sudah **DITUTUP MANUAL**. Info update order/stok sudah dikirim ke channel update stock.",
-            ephemeral: true,
-          });
-        }
-
-        return i.reply({ content: "Aksi tidak valid.", ephemeral: true });
-      }
-
-      if (i.isChatInputCommand() && i.commandName === "tagmap") {
-        const member = await i.guild.members.fetch(i.user.id).catch(() => null);
-
-        if (!isStaff(member)) {
-          return i.reply({ content: "Khusus staff/owner.", ephemeral: true });
-        }
-
-        const aksi = i.options.getString("aksi");
-        const keywordInput = i.options.getString("keyword");
-
-        if (aksi === "STATUS") {
-          return i.reply({
-            content:
-              `🏷️ **Status Tag Map**\n` +
-              `Status: **${tagSettings.enabled ? "ON" : "OFF"}**\n` +
-              `Keyword: **${getTagKeywordUpper()}**\n\n` +
-              `Contoh valid: \`${buildTagExamples("DisplayName").examples[0]}\`, \`${buildTagExamples("DisplayName").examples[1]}\`, \`${buildTagExamples("DisplayName").examples[2]}\``,
-            ephemeral: true,
-          });
-        }
-
-        if (aksi === "AKTIFKAN") {
-          tagSettings.enabled = true;
-          saveTagSettings();
-
-          await refreshPanelMessage(client).catch(() => {});
-
-          return i.reply({
-            content:
-              `✅ Wajib tag map di Display Name Roblox sudah **DIATIFKAN**.\n` +
-              `Keyword aktif: **${getTagKeywordUpper()}**`,
-            ephemeral: true,
-          });
-        }
-
-        if (aksi === "MATIKAN") {
-          tagSettings.enabled = false;
-          saveTagSettings();
-
-          await refreshPanelMessage(client).catch(() => {});
-
-          return i.reply({
-            content: "✅ Wajib tag map di Display Name Roblox sudah **DIMATIKAN**.",
-            ephemeral: true,
-          });
-        }
-
-        if (aksi === "GANTI") {
-          const cleanKeyword = normalizeTagKeyword(keywordInput);
-
-          if (!cleanKeyword) {
-            return i.reply({
-              content: "❌ Keyword tidak boleh kosong. Contoh: `/tagmap aksi:ganti keyword keyword:adbm`",
-              ephemeral: true,
-            });
-          }
-
-          tagSettings.keyword = cleanKeyword;
-          saveTagSettings();
-
-          await refreshPanelMessage(client).catch(() => {});
-
-          const example = buildTagExamples("DisplayName");
-
-          return i.reply({
-            content:
-              `✅ Keyword tag map berhasil diganti menjadi **${getTagKeywordUpper()}**.\n` +
-              `Status wajib tag map saat ini: **${tagSettings.enabled ? "ON" : "OFF"}**\n\n` +
-              `Contoh valid:\n` +
-              `• ${example.examples[0]}\n` +
-              `• ${example.examples[1]}\n` +
-              `• ${example.examples[2]}`,
             ephemeral: true,
           });
         }
@@ -2492,6 +2553,7 @@ export function setupOrderRobux(discordClient) {
           });
         }
 
+        consumeManualStockForCompletedOrder(order);
         order.status = "DONE";
         order.doneAt = nowIso();
 
@@ -2652,7 +2714,14 @@ export function setupOrderRobux(discordClient) {
           const qty = Number(String(qtyRaw || "").replace(/[^\d]/g, ""));
 
           if (!Number.isFinite(qty) || qty < 1000) {
-            return i.editReply("Jumlah minimal 1000.");
+            return i.editReply("Jumlah harus minimal 1.000 Robux dan kelipatan 1.000.");
+          }
+
+          const configuredMin = getConfiguredMinOrderQty();
+          if (configuredMin && qty < configuredMin) {
+            return i.editReply(
+              `❌ Minimal order saat ini **${fmtIDR(configuredMin)} Robux**. Silakan input minimal ${fmtIDR(configuredMin)}.`
+            );
           }
 
           if (qty % 1000 !== 0) {
@@ -2683,26 +2752,6 @@ export function setupOrderRobux(discordClient) {
           } catch (e) {
             console.error("Roblox check error:", e);
             return i.editReply("Gagal cek komunitas Roblox/API Roblox. Coba lagi beberapa saat.");
-          }
-
-          if (!eligibility.ok && eligibility.failType === "TAG_MISSING") {
-            const tagUpper = getTagKeywordUpper();
-            const tagExample = buildTagExamples(eligibility.robloxDisplayName || robloxUsernameInput);
-
-            return i.editReply({
-              content:
-                `❌ **Order gagal.**\n\n` +
-                `Display Name Roblox kamu belum mencantumkan tag map **${tagUpper}**.\n\n` +
-                `👤 **Username Roblox:** \`${eligibility.robloxUsername || robloxUsernameInput}\`\n` +
-                `🏷️ **Display Name saat ini:** \`${eligibility.robloxDisplayName || "-"}\`\n\n` +
-                `Silakan ubah Display Name Roblox kamu terlebih dahulu.\n\n` +
-                `Contoh Display Name yang benar:\n` +
-                `• **${tagExample.examples[0]}**\n` +
-                `• **${tagExample.examples[1]}**\n` +
-                `• **${tagExample.examples[2]}**\n\n` +
-                `Jika sudah diganti, klik tombol **Order Robux Ulang** di bawah ini.`,
-              components: buildPanelRetryButton(),
-            });
           }
 
           if (!isAnyPaymentMethodAvailable()) {
@@ -2789,11 +2838,8 @@ export function setupOrderRobux(discordClient) {
             ineligibleReason: eligibility.ok ? null : eligibility.reason,
             failType: eligibility.failType || null,
 
-            tagRequired: tagSettings.enabled,
-            tagKeyword: tagSettings.keyword,
-            tagValid: eligibility.tagValid ?? !tagSettings.enabled,
-
             qty,
+            stockModeAtCreation: isManualStockMode() ? "MANUAL" : "AUTO",
             baseTotal,
             bankTotal: baseTotal,
             qrisTotal,
@@ -2863,6 +2909,7 @@ export function setupOrderRobux(discordClient) {
 
       const needsOrder = [
         "ob_qris",
+        "ob_qris_bagibagi",
         "ob_bank",
         "ob_cancel_user",
         "ob_close_ineligible",
@@ -2984,6 +3031,76 @@ ${getPaymentTotal(order)}
         });
       }
 
+      if (key === "ob_qris_bagibagi") {
+        if (!isQrisBagibagiEnabled() && order.paymentMethod !== "BAGIBAGI_QRIS") {
+          return i.reply({
+            content: "⛔ Pembayaran via QRIS BagiBagi sedang dinonaktifkan oleh staff.",
+            ephemeral: true,
+          });
+        }
+
+        if (!order.robloxEligible) {
+          return i.reply({ content: "Order ini tidak eligible.", ephemeral: true });
+        }
+
+        const member = await i.guild.members.fetch(i.user.id).catch(() => null);
+        const allowed = i.user.id === order.userId || isStaff(member);
+        if (!allowed) {
+          return i.reply({ content: "Kamu tidak punya akses untuk order ini.", ephemeral: true });
+        }
+
+        if (order.paymentMethod && order.paymentMethod !== "BAGIBAGI_QRIS") {
+          return i.reply({
+            content:
+              `Metode pembayaran order ini sudah dikunci ke **${getPaymentMethodLabel(order)}**. ` +
+              "Jika ingin QRIS BagiBagi, close order lalu buat order baru.",
+            ephemeral: true,
+          });
+        }
+
+        if (["PAID", "DONE", "PROOF_SUBMITTED"].includes(order.status)) {
+          return i.reply({
+            content:
+              order.status === "PROOF_SUBMITTED"
+                ? "✅ Bukti pembayaran sudah dikirim dan sedang menunggu pengecekan staff."
+                : "✅ Pembayaran/order ini sudah diproses.",
+            ephemeral: true,
+          });
+        }
+
+        if (["CANCELLED", "EXPIRED", "CLOSED"].includes(order.status)) {
+          return i.reply({
+            content: "Order ini sudah ditutup/expired dan tidak bisa dibayar.",
+            ephemeral: true,
+          });
+        }
+
+        if (order.status === "AWAITING_BAGIBAGI_QRIS" && order.paymentMethod === "BAGIBAGI_QRIS") {
+          return i.reply({
+            content: "⏳ Mohon tunggu sebentar, QRIS pembayaran sedang dibuat oleh Owner/Staff.",
+            ephemeral: true,
+          });
+        }
+
+        const total = getBankTotal(order);
+        order.paymentMethod = "BAGIBAGI_QRIS";
+        order.paymentAmount = total;
+        order.qrisTotal = total;
+        order.total = total;
+        order.status = "AWAITING_BAGIBAGI_QRIS";
+        order.autoCloseEnabled = false;
+        order.autoClosePaused = true;
+        order.autoCloseDeadlineAt = null;
+        touchActivity(order, "bagibagi_qris_requested");
+        orders.set(order.orderId, order);
+        saveOrders();
+
+        await syncStockAndPanel(client).catch(() => {});
+        return i.reply({
+          content: "⏳ Mohon tunggu sebentar, QRIS pembayaran sedang dibuat oleh Owner/Staff.",
+        });
+      }
+
       if (key === "ob_qris") {
         if (!isQrisEnabled() && order.paymentMethod !== "SHOPEEPAY_QRIS_STATIC") {
           return i.reply({
@@ -3003,15 +3120,11 @@ ${getPaymentTotal(order)}
           return i.reply({ content: "Kamu tidak punya akses untuk order ini.", ephemeral: true });
         }
 
-        if (
-          order.paymentMethod === "SEABANK_TRANSFER" ||
-          (order.status === "PROOF_SUBMITTED" &&
-            order.paymentMethod !== "SHOPEEPAY_QRIS_STATIC")
-        ) {
+        if (order.paymentMethod && order.paymentMethod !== "SHOPEEPAY_QRIS_STATIC") {
           return i.reply({
             content:
-              "🏦 Metode pembayaran order ini sudah dikunci ke **Transfer SeaBank**. " +
-              "Silakan lanjut transfer dan upload bukti. Jika ingin QRIS, close order lalu buat order baru.",
+              `Metode pembayaran order ini sudah dikunci ke **${getPaymentMethodLabel(order)}**. ` +
+              "Jika ingin QRIS Statis, close order lalu buat order baru.",
             ephemeral: true,
           });
         }
@@ -3104,14 +3217,14 @@ ${getPaymentTotal(order)}
         }
 
         if (
-          ["SHOPEEPAY_QRIS_STATIC", "SHOPEEPAY_QRIS", "MIDTRANS_QRIS"].includes(
-            order.paymentMethod
-          ) && !isLegacySeaBankOrder(order)
+          order.paymentMethod &&
+          order.paymentMethod !== "SEABANK_TRANSFER" &&
+          !isLegacySeaBankOrder(order)
         ) {
           return i.reply({
             content:
-              "📱 Metode pembayaran order ini sudah dikunci ke **QRIS**. " +
-              "Silakan selesaikan QRIS yang sudah dibuat. Jika ingin SeaBank, close order lalu buat order baru.",
+              `Metode pembayaran order ini sudah dikunci ke **${getPaymentMethodLabel(order)}**. ` +
+              "Jika ingin SeaBank, close order lalu buat order baru.",
             ephemeral: true,
           });
         }
