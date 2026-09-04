@@ -50,7 +50,6 @@ const QRIS_STATIC_MERCHANT_NAME = String(
   process.env.QRIS_STATIC_MERCHANT_NAME || "UNDERCOVER"
 ).trim();
 
-const ELIGIBLE_DAYS = Number(process.env.ELIGIBLE_DAYS || 14);
 const PRICE_PER_1000 = Number(process.env.PRICE_PER_1000 || 100000);
 const QRIS_ADMIN_PERCENT = Number(process.env.QRIS_ADMIN_PERCENT || 1);
 const AUTO_CLOSE_MINUTES = Number(process.env.AUTO_CLOSE_MINUTES || 30);
@@ -152,7 +151,7 @@ function isManualStockMode() {
 }
 
 function getStockModeLabel() {
-  return isManualStockMode() ? "MANUAL" : "OTOMATIS (Community Payout)";
+  return isManualStockMode() ? "MANUAL" : "OTOMATIS (Username)";
 }
 
 // ========= PAYMENT METHOD SETTINGS =========
@@ -304,8 +303,7 @@ function normalizeLoadedOrder(order) {
       order.status === "AWAITING_PAYMENT" ||
       order.status === "AWAITING_PROOF" ||
       order.status === "QRIS_PENDING" ||
-      order.status === "DONE" ||
-      order.status === "INELIGIBLE"
+      order.status === "DONE"
     ) {
       order.autoCloseDeadlineAt = new Date(
         new Date(base).getTime() + AUTO_CLOSE_MINUTES * 60 * 1000
@@ -667,139 +665,7 @@ async function robloxGetUserInfo(userId) {
   };
 }
 
-async function robloxGetGroupMembershipForUser(groupId, userId) {
-  const filter = encodeURIComponent(`user == 'users/${userId}'`);
-  const url = `https://apis.roblox.com/cloud/v2/groups/${groupId}/memberships?filter=${filter}&pageSize=10`;
-
-  const r = await fetch(url, {
-    method: "GET",
-    headers: { "x-api-key": ROBLOX_API_KEY },
-  });
-
-  if (!r.ok) {
-    const t = await r.text().catch(() => "");
-    throw new Error(`Roblox membership fetch failed: ${r.status} ${t}`);
-  }
-
-  const json = await r.json();
-
-  const memberships =
-    json?.groupMemberships ||
-    json?.memberships ||
-    json?.data ||
-    json?.group_memberships ||
-    [];
-
-  if (!Array.isArray(memberships) || memberships.length === 0) return null;
-
-  return memberships[0];
-}
-
-function extractMembershipJoinTime(membership) {
-  const candidates = [
-    membership?.createTime,
-    membership?.createdTime,
-    membership?.create_time,
-    membership?.joinedTime,
-    membership?.joinTime,
-    membership?.startTime,
-    membership?.createdAt,
-  ].filter(Boolean);
-
-  if (candidates.length === 0) return null;
-
-  const dt = new Date(candidates[0]);
-  if (isNaN(dt.getTime())) return null;
-
-  return dt.toISOString();
-}
-
-async function checkRobloxGroupEligibility(username) {
-  const clean = String(username || "").trim().replace(/^@/, "");
-
-  if (!clean) {
-    return {
-      ok: false,
-      failType: "USERNAME_EMPTY",
-      reason: "Username kosong.",
-    };
-  }
-
-  const usernameLookup = await robloxUsernameToUserId(clean);
-
-  if (!usernameLookup?.id) {
-    return {
-      ok: false,
-      failType: "USERNAME_NOT_FOUND",
-      reason: "Username Roblox tidak ditemukan.",
-    };
-  }
-
-  const userId = usernameLookup.id;
-
-  let userInfo = usernameLookup;
-
-  try {
-    userInfo = await robloxGetUserInfo(userId);
-  } catch (e) {
-    console.error("robloxGetUserInfo error:", e);
-  }
-
-  const displayName = userInfo?.displayName || usernameLookup?.displayName || clean;
-  const realUsername = userInfo?.name || usernameLookup?.name || clean;
-
-  const membership = await robloxGetGroupMembershipForUser(ROBLOX_GROUP_ID, userId);
-
-  if (!membership) {
-    return {
-      ok: false,
-      failType: "NOT_IN_GROUP",
-      reason: "User belum join komunitas Roblox (Group).",
-      userId,
-      robloxUsername: realUsername,
-      robloxDisplayName: displayName,
-      joinTime: null,
-      daysInGroup: 0,
-      isMember: false,
-    };
-  }
-
-  const joinTimeIso = extractMembershipJoinTime(membership);
-
-  if (!joinTimeIso) {
-    return {
-      ok: false,
-      failType: "JOIN_TIME_MISSING",
-      reason: "User member, tapi API tidak mengembalikan tanggal join. Tidak bisa validasi 14 hari.",
-      userId,
-      robloxUsername: realUsername,
-      robloxDisplayName: displayName,
-      joinTime: null,
-      daysInGroup: null,
-      isMember: true,
-    };
-  }
-
-  const now = nowIso();
-  const daysInGroup = daysBetween(now, joinTimeIso);
-  const eligible = daysInGroup >= ELIGIBLE_DAYS;
-
-  return {
-    ok: eligible,
-    failType: eligible ? null : "DAYS_NOT_ENOUGH",
-    reason: eligible
-      ? "Eligible."
-      : `Belum ${ELIGIBLE_DAYS} hari join komunitas. Baru ${daysInGroup} hari.`,
-    userId,
-    robloxUsername: realUsername,
-    robloxDisplayName: displayName,
-    joinTime: joinTimeIso,
-    daysInGroup,
-    isMember: true,
-  };
-}
-
-// ========= AUTO STOCK =========
+// ========= AUTO STOCK ==========
 async function robloxGetGroupFunds(groupId) {
   const url = `https://economy.roblox.com/v1/groups/${groupId}/currency`;
 
@@ -982,7 +848,7 @@ function createInvoicePdf(order, staffUser) {
       doc.fontSize(12).text("Detail Pembelian", { underline: true });
       doc.moveDown(0.6);
 
-      const itemName = "Robux via Community Payout";
+      const itemName = "Robux via Username";
       const qty = Number(order.qty || 0);
       const total = getPaymentTotal(order);
 
@@ -1055,17 +921,15 @@ function buildPanelEmbed() {
     : `\n_Mode stok: ${getStockModeLabel()} | Updated: ${fmtDateID(stockCache.updatedAt)} WIB | Error: ${stockCache.error}_`;
 
   return new EmbedBuilder()
-    .setTitle("💸ORDER ROBUX — VIA COMMUNITY PAYOUT")
+    .setTitle("💸ORDER ROBUX — VIA USERNAME")
     .setDescription(
       [
         stockLine + stockWarn + stockMeta,
         "",
         "**Syarat sebelum order**",
-        `• Wajib join komunitas Roblox minimal **${ELIGIBLE_DAYS} hari**`,
         getConfiguredMinOrderQty()
           ? `• Minimum order saat ini **${fmtIDR(getConfiguredMinOrderQty())} Robux**`
           : "• Minimum order khusus: **tidak diatur** (tetap kelipatan 1.000 Robux)",
-        "• Link komunitas: https://www.roblox.com/share/g/819348691",
         "",
         "💰 **RATE ROBUX**",
         `💎 1.000 Robux = Rp ${fmtIDR(PRICE_PER_1000)}`,
@@ -1092,13 +956,12 @@ function buildPanelEmbed() {
         "**Cara order (step by step)**",
         "1) Klik tombol **ORDER ROBUX** di bawah",
         "2) Isi **Username Roblox** & **Jumlah**",
-        "3) Bot cek join komunitas Roblox",
-        "4) Ticket dibuat otomatis jika memenuhi pengecekan awal",
-        "5) Pilih metode pembayaran yang sedang aktif",
-        "6) SeaBank: transfer → upload bukti → staff cek",
-        `7) QRIS Statis: scan QR → bayar harga + admin ${getQrisAdminPercent()}% → upload bukti → staff cek`,
-        "8) QRIS BagiBagi: tunggu Owner/Staff mengirim QRIS → bayar → upload bukti",
-        "9) Setelah pembayaran valid, staff melanjutkan pengiriman Robux",
+        "3) Ticket dibuat otomatis",
+        "4) Pilih metode pembayaran yang sedang aktif",
+        "5) SeaBank: transfer → upload bukti → staff cek",
+        `6) QRIS Statis: scan QR → bayar harga + admin ${getQrisAdminPercent()}% → upload bukti → staff cek`,
+        "7) QRIS BagiBagi: tunggu Owner/Staff mengirim QRIS → bayar → upload bukti",
+        "8) Setelah pembayaran valid, staff melanjutkan pengiriman Robux",
         "",
         "⚠️ **Metode pembayaran terkunci setelah dipilih. Jika salah pilih, close order lalu buat order baru.**",
       ].join("\n")
@@ -1221,58 +1084,35 @@ function buildOrderModal() {
 }
 
 function buildCustomerStatusEmbed(order) {
-  const days = Number.isFinite(order.robloxDaysInGroup) ? order.robloxDaysInGroup : 0;
-  const joinLine = order.robloxJoinTime ? fmtDateID(order.robloxJoinTime) : "-";
-
-  const eligibleLine = order.robloxEligible
-    ? `✅ Eligible — **${days}/${ELIGIBLE_DAYS} hari**`
-    : `❌ Tidak eligible — **${days}/${ELIGIBLE_DAYS} hari**`;
-
-  const desc = order.robloxEligible
-    ? [
-        `👤 **Username Roblox:** \`${order.robloxUsername}\``,
-        `🏷️ **Display Name:** \`${order.robloxDisplayName || "-"}\``,
-        "",
-        `📊 **Status Join Community:** ${eligibleLine}`,
-        `📅 **Tanggal Join:** ${joinLine}`,
-        "",
-        `💎 **Total Robux:** ${fmtIDR(order.qty)}`,
-        `📌 **Rate:** Rp ${fmtIDR(PRICE_PER_1000)} / 1.000 Robux`,
-        "",
-        "💳 **Pilih Metode Pembayaran:**",
-        isSeaBankEnabled()
-          ? `🏦 **Transfer SeaBank:** Rp ${fmtIDR(getBankTotal(order))}`
-          : "🏦 **Transfer SeaBank:** NONAKTIF",
-        isQrisAvailable()
-          ? `🟠 **QRIS Statis:** Rp ${fmtIDR(getQrisTotal(order))} *(termasuk admin ${getQrisAdminPercent()}%)*`
-          : "🟠 **QRIS Statis:** NONAKTIF",
-        isQrisBagibagiEnabled()
-          ? "🟣 **QRIS BagiBagi:** tunggu QRIS pembayaran dari Owner/Staff"
-          : "🟣 **QRIS BagiBagi:** NONAKTIF",
-        "",
-        "🏦 **SeaBank:** transfer sesuai nominal → upload bukti transfer → tunggu staff cek.",
-        `📱 **QRIS Statis:** scan QR statis → bayar total termasuk admin ${getQrisAdminPercent()}% → upload bukti → tunggu staff cek.`,
-        "🟣 **QRIS BagiBagi:** setelah dipilih, tunggu Owner/Staff mengirim QRIS pembayaran di ticket.",
-        "",
-        "⚠️ Setelah salah satu metode dipilih, metode pembayaran dikunci untuk order ini.",
-      ].join("\n")
-    : [
-        `👤 **Username Roblox:** \`${order.robloxUsername}\``,
-        `🏷️ **Display Name:** \`${order.robloxDisplayName || "-"}\``,
-        "",
-        `📊 **Status Join Community:** ${eligibleLine}`,
-        `📅 **Tanggal Join:** ${joinLine}`,
-        "",
-        `⚠️ **Alasan:** ${order.ineligibleReason || "Belum memenuhi syarat."}`,
-        "",
-        `⏳ Ticket ini akan otomatis ditutup setelah **${AUTO_CLOSE_MINUTES} menit**.`,
-        "Jika sudah memperbaiki syaratnya, klik tombol **Order Robux Ulang** di bawah.",
-      ].join("\n");
+  const desc = [
+    `👤 **Username Roblox:** \`${order.robloxUsername}\``,
+    `🏷️ **Display Name:** \`${order.robloxDisplayName || "-"}\``,
+    "",
+    `💎 **Total Robux:** ${fmtIDR(order.qty)}`,
+    `📌 **Rate:** Rp ${fmtIDR(PRICE_PER_1000)} / 1.000 Robux`,
+    "",
+    "💳 **Pilih Metode Pembayaran:**",
+    isSeaBankEnabled()
+      ? `🏦 **Transfer SeaBank:** Rp ${fmtIDR(getBankTotal(order))}`
+      : "🏦 **Transfer SeaBank:** NONAKTIF",
+    isQrisAvailable()
+      ? `🟠 **QRIS Statis:** Rp ${fmtIDR(getQrisTotal(order))} *(termasuk admin ${getQrisAdminPercent()}%)*`
+      : "🟠 **QRIS Statis:** NONAKTIF",
+    isQrisBagibagiEnabled()
+      ? "🟣 **QRIS BagiBagi:** tunggu QRIS pembayaran dari Owner/Staff"
+      : "🟣 **QRIS BagiBagi:** NONAKTIF",
+    "",
+    "🏦 **SeaBank:** transfer sesuai nominal → upload bukti transfer → tunggu staff cek.",
+    `📱 **QRIS Statis:** scan QR statis → bayar total termasuk admin ${getQrisAdminPercent()}% → upload bukti → tunggu staff cek.`,
+    "🟣 **QRIS BagiBagi:** setelah dipilih, tunggu Owner/Staff mengirim QRIS pembayaran di ticket.",
+    "",
+    "⚠️ Setelah salah satu metode dipilih, metode pembayaran dikunci untuk order ini.",
+  ].join("\n");
 
   return new EmbedBuilder()
     .setTitle(`UNDERCOVER — Ticket ${order.orderId}`)
     .setDescription(desc)
-    .setColor(order.robloxEligible ? 0x2ecc71 : 0xe74c3c)
+    .setColor(0x2ecc71)
     .setFooter({ text: "UNDERCOVER — Order System" });
 }
 
@@ -1329,21 +1169,6 @@ function buildButtonsAfterDone(orderId) {
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(`ob_close_ticket:${orderId}`)
-        .setLabel("🔒 Close Ticket")
-        .setStyle(ButtonStyle.Danger)
-    ),
-  ];
-}
-
-function buildCustomerButtonsIneligible(orderId) {
-  return [
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`ob_order_retry:${orderId}`)
-        .setLabel("🔁 Order Robux Ulang")
-        .setStyle(ButtonStyle.Success),
-      new ButtonBuilder()
-        .setCustomId(`ob_close_ineligible:${orderId}`)
         .setLabel("🔒 Close Ticket")
         .setStyle(ButtonStyle.Danger)
     ),
@@ -1408,8 +1233,7 @@ function buildStockReadyBroadcastEmbed() {
         "",
         "🔥 **Bisa langsung order sekarang**",
         "⚡ **Fast response**",
-        "🎯 **Via Community Payout**",
-        `✅ **Wajib join komunitas minimal ${ELIGIBLE_DAYS} hari**`,
+        "🎯 **Via Username**",
         "",
         `🛒 **Langsung order ke <#${PANEL_CHANNEL_ID}>**`,
         "",
@@ -1558,7 +1382,7 @@ function buildTestimoniEmbed(order, customerUser, staffUser) {
       [
         "```yaml",
         "Status    : BERHASIL DIPROSES",
-        "Layanan   : Robux via Community Payout",
+        "Layanan   : Robux via Username",
         "```",
         "",
         "✨ **Pesanan berhasil diproses dengan sukses!**",
@@ -1795,7 +1619,7 @@ async function syncStockAndPanel(client, options = {}) {
 // ========= CHANNEL CLOSE =========
 async function deleteTicketChannel(channel, order, reasonText, finalStatus = null) {
   try {
-    const terminal = new Set(["DONE", "CANCELLED", "INELIGIBLE", "EXPIRED", "CLOSED"]);
+    const terminal = new Set(["DONE", "CANCELLED", "EXPIRED", "CLOSED"]);
 
     if (finalStatus) {
       order.status = finalStatus;
@@ -1895,16 +1719,6 @@ async function runAutoCloseSweep(client) {
         continue;
       }
 
-      if (order.status === "INELIGIBLE") {
-        await deleteTicketChannel(
-          ch,
-          order,
-          `🔒 Ticket ineligible ditutup otomatis setelah ${AUTO_CLOSE_MINUTES} menit. Ticket akan dihapus...`,
-          "INELIGIBLE"
-        );
-        continue;
-      }
-
       if (order.status === "DONE") {
         await deleteTicketChannel(
           ch,
@@ -1981,7 +1795,7 @@ async function refreshPendingPaymentChoiceMessages(client) {
 
   for (const order of orders.values()) {
     if (order.status !== "AWAITING_PAYMENT" || order.paymentMethod) continue;
-    if (!order.robloxEligible || !order.channelId) continue;
+    if (!order.channelId) continue;
 
     const channel = await guild.channels.fetch(order.channelId).catch(() => null);
     if (!channel || channel.type !== ChannelType.GuildText) continue;
@@ -2157,7 +1971,7 @@ export function setupOrderRobux(discordClient) {
             .setRequired(true)
             .addChoices(
               { name: "status", value: "STATUS" },
-              { name: "otomatis (Community Payout)", value: "AUTO" },
+              { name: "otomatis (Username)", value: "AUTO" },
               { name: "manual", value: "MANUAL" }
             )
         )
@@ -2207,10 +2021,6 @@ export function setupOrderRobux(discordClient) {
       const isCustomer = msg.author.id === order.userId;
 
       touchActivity(order, isCustomer ? "customer_message" : "staff_or_other_message");
-
-      if (order.status === "INELIGIBLE") {
-        return;
-      }
 
       if (order.status === "DONE") {
         bumpAutoCloseDeadline(order, AUTO_CLOSE_MINUTES, "message_after_done");
@@ -2414,7 +2224,7 @@ export function setupOrderRobux(discordClient) {
           await syncStockAndPanel(client, { suppressBroadcast: true }).catch(() => {});
           return i.reply({
             content:
-              `✅ Mode stok diubah ke **OTOMATIS (Community Payout)**.\n` +
+              `✅ Mode stok diubah ke **OTOMATIS (Username)**.\n` +
               `Stok tersedia saat ini: **${stockCache.ok ? `${fmtIDR(stockCache.available)} Robux` : "gagal fetch"}**.`,
             ephemeral: true,
           });
@@ -2745,15 +2555,6 @@ export function setupOrderRobux(discordClient) {
             );
           }
 
-          let eligibility;
-
-          try {
-            eligibility = await checkRobloxGroupEligibility(robloxUsernameInput);
-          } catch (e) {
-            console.error("Roblox check error:", e);
-            return i.editReply("Gagal cek komunitas Roblox/API Roblox. Coba lagi beberapa saat.");
-          }
-
           if (!isAnyPaymentMethodAvailable()) {
             return i.editReply(
               "⛔ Order tidak dapat dibuat karena saat ini tidak ada metode pembayaran yang aktif."
@@ -2829,14 +2630,8 @@ export function setupOrderRobux(discordClient) {
             channelId: ticket.id,
             userId: user.id,
 
-            robloxUsername: eligibility.robloxUsername || robloxUsernameInput,
-            robloxDisplayName: eligibility.robloxDisplayName || "-",
-            robloxUserId: eligibility.userId ?? null,
-            robloxJoinTime: eligibility.joinTime ?? null,
-            robloxDaysInGroup: eligibility.daysInGroup ?? 0,
-            robloxEligible: Boolean(eligibility.ok),
-            ineligibleReason: eligibility.ok ? null : eligibility.reason,
-            failType: eligibility.failType || null,
+            robloxUsername: robloxUsernameInput,
+            robloxDisplayName: "-",
 
             qty,
             stockModeAtCreation: isManualStockMode() ? "MANUAL" : "AUTO",
@@ -2847,7 +2642,7 @@ export function setupOrderRobux(discordClient) {
             paymentAmount: null,
             note: note || "",
 
-            status: eligibility.ok ? "AWAITING_PAYMENT" : "INELIGIBLE",
+            status: "AWAITING_PAYMENT",
             paymentMethod: null,
             createdAt: nowIso(),
             lastActivityAt: nowIso(),
@@ -2864,35 +2659,22 @@ export function setupOrderRobux(discordClient) {
 
           const statusEmbed = buildCustomerStatusEmbed(order);
 
-          if (order.robloxEligible) {
-            const paymentChoiceMessage = await ticket
-              .send({
-                content: buildPaymentChoicePrompt(user.id),
-                embeds: [statusEmbed],
-                components: buildCustomerButtonsEligible(orderId),
-              })
-              .catch(() => null);
+          const paymentChoiceMessage = await ticket
+            .send({
+              content: buildPaymentChoicePrompt(user.id),
+              embeds: [statusEmbed],
+              components: buildCustomerButtonsEligible(orderId),
+            })
+            .catch(() => null);
 
-            if (paymentChoiceMessage) {
-              order.paymentChoiceMessageId = paymentChoiceMessage.id;
-              orders.set(order.orderId, order);
-              saveOrders();
-            }
+          if (paymentChoiceMessage) {
+            order.paymentChoiceMessageId = paymentChoiceMessage.id;
+            orders.set(order.orderId, order);
+            saveOrders();
+          }
 
-            if (order.note) {
-              await ticket.send({ content: `📝 Catatan: ${order.note}` }).catch(() => {});
-            }
-          } else {
-            await ticket
-              .send({
-                content:
-                  `Halo <@${user.id}> 👋\nKamu **belum memenuhi syarat** untuk order.\n` +
-                  `⏳ Ticket ini akan auto close dalam **${AUTO_CLOSE_MINUTES} menit**.\n\n` +
-                  `Kalau syarat sudah diperbaiki, klik tombol **🔁 Order Robux Ulang** di bawah.`,
-                embeds: [statusEmbed],
-                components: buildCustomerButtonsIneligible(orderId),
-              })
-              .catch(() => {});
+          if (order.note) {
+            await ticket.send({ content: `📝 Catatan: ${order.note}` }).catch(() => {});
           }
 
           return i.editReply(`✅ Ticket dibuat: <#${ticket.id}>`);
@@ -2912,12 +2694,10 @@ export function setupOrderRobux(discordClient) {
         "ob_qris_bagibagi",
         "ob_bank",
         "ob_cancel_user",
-        "ob_close_ineligible",
         "ob_copy_username",
         "ob_close_ticket",
         "ob_copy_bank",
         "ob_copy_bank_total",
-        "ob_order_retry",
       ];
 
       if (needsOrder.includes(key)) {
@@ -2934,45 +2714,6 @@ export function setupOrderRobux(discordClient) {
             ephemeral: true,
           });
         }
-      }
-
-      if (key === "ob_order_retry") {
-        const member = await i.guild.members.fetch(i.user.id).catch(() => null);
-        const allowed = i.user.id === order.userId || isStaff(member);
-
-        if (!allowed) {
-          return i.reply({
-            content: "Kamu tidak punya akses untuk order ini.",
-            ephemeral: true,
-          });
-        }
-
-        await syncStockAndPanel(client).catch(() => {});
-
-        if (!isOrderOpen()) {
-          return i.reply({
-            content: "🔒 Order Robux sedang **CLOSE**. Silakan tunggu info dari staff.",
-            ephemeral: true,
-          });
-        }
-
-        if (!isStockReady()) {
-          return i.reply({
-            content:
-              "⛔ Stok Robux sedang **HABIS**.\n" +
-              "Silakan tunggu update stok ready, lalu klik tombol ini lagi.",
-            ephemeral: true,
-          });
-        }
-
-        if (!isAnyPaymentMethodAvailable()) {
-          return i.reply({
-            content: "⛔ Saat ini tidak ada metode pembayaran yang aktif. Silakan hubungi staff.",
-            ephemeral: true,
-          });
-        }
-
-        return i.showModal(buildOrderModal());
       }
 
       if (key === "ob_copy_username") {
@@ -3039,10 +2780,6 @@ ${getPaymentTotal(order)}
           });
         }
 
-        if (!order.robloxEligible) {
-          return i.reply({ content: "Order ini tidak eligible.", ephemeral: true });
-        }
-
         const member = await i.guild.members.fetch(i.user.id).catch(() => null);
         const allowed = i.user.id === order.userId || isStaff(member);
         if (!allowed) {
@@ -3107,10 +2844,6 @@ ${getPaymentTotal(order)}
             content: "⛔ Pembayaran via QRIS sedang dinonaktifkan oleh staff.",
             ephemeral: true,
           });
-        }
-
-        if (!order.robloxEligible) {
-          return i.reply({ content: "Order ini tidak eligible.", ephemeral: true });
         }
 
         const member = await i.guild.members.fetch(i.user.id).catch(() => null);
@@ -3195,13 +2928,6 @@ ${getPaymentTotal(order)}
         if (!isSeaBankEnabled() && order.paymentMethod !== "SEABANK_TRANSFER") {
           return i.reply({
             content: "⛔ Pembayaran via SeaBank sedang dinonaktifkan oleh staff.",
-            ephemeral: true,
-          });
-        }
-
-        if (!order.robloxEligible) {
-          return i.reply({
-            content: "Order ini tidak eligible.",
             ephemeral: true,
           });
         }
@@ -3332,32 +3058,6 @@ ${getPaymentTotal(order)}
           order,
           "🔒 Ticket ditutup. Channel akan dihapus...",
           "CLOSED"
-        );
-
-        return;
-      }
-
-      if (key === "ob_close_ineligible") {
-        const member = await i.guild.members.fetch(i.user.id).catch(() => null);
-        const allowed = i.user.id === order.userId || isStaff(member);
-
-        if (!allowed) {
-          return i.reply({
-            content: "Kamu tidak punya akses untuk ticket ini.",
-            ephemeral: true,
-          });
-        }
-
-        await i.reply({
-          content: "🔒 Ticket akan ditutup dan dihapus dalam 3 detik...",
-          ephemeral: true,
-        });
-
-        await deleteTicketChannel(
-          i.channel,
-          order,
-          "🔒 Ticket ineligible ditutup. Channel akan dihapus...",
-          "INELIGIBLE"
         );
 
         return;
