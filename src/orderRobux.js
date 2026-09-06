@@ -1855,7 +1855,12 @@ export function setupOrderRobux(discordClient) {
   loadOrders();
   loadOrderSettings();
   loadPaymentSettings();
-  client.once("ready", async () => {
+  
+  let readyHandlerExecuted = false;
+  client.on("ready", async () => {
+    if (readyHandlerExecuted) return;
+    readyHandlerExecuted = true;
+    
     console.log(`Logged in as ${client.user.tag}`);
 
     if (!isStaticQrisConfigured()) {
