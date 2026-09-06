@@ -1851,6 +1851,7 @@ function buildPaymentSettingsStatus() {
 
 export function setupOrderRobux(discordClient) {
   client = discordClient;
+  console.log("[setupOrderRobux] Function called, setting up order system...");
   loadOrders();
   loadOrderSettings();
   loadPaymentSettings();
@@ -2011,12 +2012,20 @@ export function setupOrderRobux(discordClient) {
   });
 
   // ========= MESSAGE TRACKING =========
+  console.log("[setupOrderRobux] Registering messageCreate event listener...");
   client.on("messageCreate", async (msg) => {
+    console.log(`[Message Debug] Message received in channel ${msg.channelId} from ${msg.author.id}`);
     try {
-      if (!msg.guild || msg.author.bot) return;
+      if (!msg.guild || msg.author.bot) {
+        console.log(`[Message Debug] Message filtered: guild=${!!msg.guild}, bot=${msg.author.bot}`);
+        return;
+      }
 
       const order = Array.from(orders.values()).find((o) => o.channelId === msg.channelId);
-      if (!order) return;
+      if (!order) {
+        console.log(`[Message Debug] No order found for channel ${msg.channelId}`);
+        return;
+      }
 
       console.log(`[Message Debug] Order found: ${order.orderId}, Status: ${order.status}, Author: ${msg.author.id}, Customer ID: ${order.userId}`);
 
