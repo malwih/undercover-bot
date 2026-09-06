@@ -86,7 +86,7 @@ let orderSettings = {
 let paymentSettings = {
   seabankEnabled: true,
   qrisEnabled: true,
-  qrisBagibagiEnabled: true,
+  qrisAutoEnabled: true,
 };
 
 // ========= ORDER OPEN/CLOSE SETTINGS =========
@@ -169,8 +169,8 @@ function loadPaymentSettings() {
       seabankEnabled:
         typeof json.seabankEnabled === "boolean" ? json.seabankEnabled : true,
       qrisEnabled: typeof json.qrisEnabled === "boolean" ? json.qrisEnabled : true,
-      qrisBagibagiEnabled:
-        typeof json.qrisBagibagiEnabled === "boolean" ? json.qrisBagibagiEnabled : true,
+      qrisAutoEnabled:
+        typeof json.qrisAutoEnabled === "boolean" ? json.qrisAutoEnabled : true,
     };
 
     savePaymentSettings();
@@ -179,7 +179,7 @@ function loadPaymentSettings() {
     paymentSettings = {
       seabankEnabled: true,
       qrisEnabled: true,
-      qrisBagibagiEnabled: true,
+      qrisAutoEnabled: true,
     };
     savePaymentSettings();
   }
@@ -201,8 +201,8 @@ function isQrisEnabled() {
   return paymentSettings.qrisEnabled === true;
 }
 
-function isQrisBagibagiEnabled() {
-  return paymentSettings.qrisBagibagiEnabled === true;
+function isQrisAutoEnabled() {
+  return paymentSettings.qrisAutoEnabled === true;
 }
 
 function isQrisAvailable() {
@@ -210,14 +210,14 @@ function isQrisAvailable() {
 }
 
 function isAnyPaymentMethodAvailable() {
-  return isSeaBankEnabled() || isQrisAvailable() || isQrisBagibagiEnabled();
+  return isSeaBankEnabled() || isQrisAvailable() || isQrisAutoEnabled();
 }
 
 function getEnabledPaymentMethodLabels() {
   const methods = [];
   if (isSeaBankEnabled()) methods.push("Transfer SeaBank");
   if (isQrisAvailable()) methods.push("QRIS Statis");
-  if (isQrisBagibagiEnabled()) methods.push("QRIS BagiBagi");
+  if (isQrisAutoEnabled()) methods.push("QRIS Auto");
   return methods;
 }
 
@@ -461,7 +461,7 @@ function getQrisTotal(order) {
 function isLegacySeaBankOrder(order) {
   return (
     ["AWAITING_PROOF", "PROOF_SUBMITTED"].includes(order?.status) &&
-    !["SHOPEEPAY_QRIS_STATIC", "BAGIBAGI_QRIS", "SHOPEEPAY_QRIS", "MIDTRANS_QRIS"].includes(
+    !["SHOPEEPAY_QRIS_STATIC", "AUTO_QRIS", "SHOPEEPAY_QRIS", "MIDTRANS_QRIS"].includes(
       order?.paymentMethod
     )
   );
@@ -472,7 +472,7 @@ function getPaymentTotal(order) {
   if (Number.isFinite(explicit) && explicit > 0) return Math.round(explicit);
 
   if (order?.paymentMethod === "SHOPEEPAY_QRIS_STATIC") return getQrisTotal(order);
-  if (order?.paymentMethod === "BAGIBAGI_QRIS") return getBankTotal(order);
+  if (order?.paymentMethod === "AUTO_QRIS") return getBankTotal(order);
   if (["SHOPEEPAY_QRIS", "MIDTRANS_QRIS"].includes(order?.paymentMethod)) {
     return getQrisTotal(order);
   }
@@ -490,8 +490,8 @@ function getPaymentMethodLabel(order) {
   if (order?.paymentMethod === "SHOPEEPAY_QRIS_STATIC") {
     return "QRIS Statis";
   }
-  if (order?.paymentMethod === "BAGIBAGI_QRIS") {
-    return "QRIS BagiBagi";
+  if (order?.paymentMethod === "AUTO_QRIS") {
+    return "QRIS Auto";
   }
   if (order?.paymentMethod === "SHOPEEPAY_QRIS") {
     return "QRIS";
@@ -700,7 +700,7 @@ function computeReservedRobux() {
 
     const lockingStatuses = new Set([
       "AWAITING_PAYMENT",
-      "AWAITING_BAGIBAGI_QRIS",
+      "AWAITING_AUTO_QRIS",
       "AWAITING_PROOF",
       "PROOF_SUBMITTED",
       "QRIS_PENDING",
@@ -949,9 +949,9 @@ function buildPanelEmbed() {
           : isQrisEnabled()
             ? "• 🟠 **QRIS Statis** → **BELUM TERSEDIA (gambar QRIS belum terpasang)**"
             : "• 🟠 **QRIS Statis** → **NONAKTIF**",
-        isQrisBagibagiEnabled()
-          ? `• 🟣 **QRIS BagiBagi** → customer menunggu QRIS dibuat Owner/Staff, lalu bayar dan upload bukti`
-          : "• 🟣 **QRIS BagiBagi** → **NONAKTIF**",
+        isQrisAutoEnabled()
+          ? `• 🟣 **QRIS Auto** → customer menunggu QRIS dibuat Owner/Staff, lalu bayar dan upload bukti`
+          : "• 🟣 **QRIS Auto** → **NONAKTIF**",
         "",
         "**Cara order (step by step)**",
         "1) Klik tombol **ORDER ROBUX** di bawah",
@@ -960,7 +960,7 @@ function buildPanelEmbed() {
         "4) Pilih metode pembayaran yang sedang aktif",
         "5) SeaBank: transfer → upload bukti → staff cek",
         `6) QRIS Statis: scan QR → bayar harga + admin ${getQrisAdminPercent()}% → upload bukti → staff cek`,
-        "7) QRIS BagiBagi: tunggu Owner/Staff mengirim QRIS → bayar → upload bukti",
+        "7) QRIS Auto: tunggu Owner/Staff mengirim QRIS → bayar → upload bukti",
         "8) Setelah pembayaran valid, staff melanjutkan pengiriman Robux",
         "",
         "⚠️ **Metode pembayaran terkunci setelah dipilih. Jika salah pilih, close order lalu buat order baru.**",
@@ -1098,13 +1098,13 @@ function buildCustomerStatusEmbed(order) {
     isQrisAvailable()
       ? `🟠 **QRIS Statis:** Rp ${fmtIDR(getQrisTotal(order))} *(termasuk admin ${getQrisAdminPercent()}%)*`
       : "🟠 **QRIS Statis:** NONAKTIF",
-    isQrisBagibagiEnabled()
-      ? "🟣 **QRIS BagiBagi:** tunggu QRIS pembayaran dari Owner/Staff"
-      : "🟣 **QRIS BagiBagi:** NONAKTIF",
+    isQrisAutoEnabled()
+      ? "🟣 **QRIS Auto:** tunggu QRIS pembayaran dari Owner/Staff"
+      : "🟣 **QRIS Auto:** NONAKTIF",
     "",
     "🏦 **SeaBank:** transfer sesuai nominal → upload bukti transfer → tunggu staff cek.",
     `📱 **QRIS Statis:** scan QR statis → bayar total termasuk admin ${getQrisAdminPercent()}% → upload bukti → tunggu staff cek.`,
-    "🟣 **QRIS BagiBagi:** setelah dipilih, tunggu Owner/Staff mengirim QRIS pembayaran di ticket.",
+    "🟣 **QRIS Auto:** setelah dipilih, tunggu Owner/Staff mengirim QRIS pembayaran di ticket.",
     "",
     "⚠️ Setelah salah satu metode dipilih, metode pembayaran dikunci untuk order ini.",
   ].join("\n");
@@ -1137,11 +1137,11 @@ function buildCustomerButtonsEligible(orderId) {
     );
   }
 
-  if (isQrisBagibagiEnabled()) {
+  if (isQrisAutoEnabled()) {
     paymentButtons.push(
       new ButtonBuilder()
-        .setCustomId(`ob_qris_bagibagi:${orderId}`)
-        .setLabel("🟣 QRIS BagiBagi")
+        .setCustomId(`ob_qris_auto:${orderId}`)
+        .setLabel("🟣 QRIS Auto")
         .setStyle(ButtonStyle.Secondary)
     );
   }
@@ -1422,7 +1422,7 @@ async function sendTestimoniMessage(client, order, staffUser) {
     }
 
     const customerUser = await client.users.fetch(order.userId).catch(() => null);
-    const isQris = ["SHOPEEPAY_QRIS_STATIC", "BAGIBAGI_QRIS"].includes(order.paymentMethod);
+    const isQris = ["SHOPEEPAY_QRIS_STATIC", "AUTO_QRIS"].includes(order.paymentMethod);
     const proofAttachments = isQris && Array.isArray(order.proofAttachments)
       ? order.proofAttachments.filter((attachment) => attachment?.url).slice(0, 10)
       : [];
@@ -1780,7 +1780,7 @@ async function findPaymentChoiceMessage(channel, order) {
           [
             `ob_bank:${order.orderId}`,
             `ob_qris:${order.orderId}`,
-            `ob_qris_bagibagi:${order.orderId}`,
+            `ob_qris_auto:${order.orderId}`,
             `ob_cancel_user:${order.orderId}`,
           ].includes(component.customId)
         )
@@ -1829,8 +1829,8 @@ function setPaymentMethodEnabled(method, enabled) {
   if (method === "QRIS" || method === "ALL") {
     paymentSettings.qrisEnabled = enabled;
   }
-  if (method === "QRIS_BAGIBAGI" || method === "ALL") {
-    paymentSettings.qrisBagibagiEnabled = enabled;
+  if (method === "QRIS_AUTO" || method === "ALL") {
+    paymentSettings.qrisAutoEnabled = enabled;
   }
   savePaymentSettings();
 }
@@ -1845,12 +1845,17 @@ function buildPaymentSettingsStatus() {
   return (
     `🏦 SeaBank: **${isSeaBankEnabled() ? "ENABLE" : "DISABLE"}**\n` +
     `📱 QRIS Statis: **${qrisDetail}**\n` +
-    `🟣 QRIS BagiBagi: **${isQrisBagibagiEnabled() ? "ENABLE" : "DISABLE"}**`
+    `🟣 QRIS Auto: **${isQrisAutoEnabled() ? "ENABLE" : "DISABLE"}**`
   );
 }
 
 export function setupOrderRobux(discordClient) {
-  client = discordClient;
+client = discordClient;
+loadOrders();
+loadOrderSettings();
+loadPaymentSettings();
+client.once("ready", async () => {
+console.log(`Logged in as ${client.user.tag}`);
   loadOrders();
   loadOrderSettings();
   loadPaymentSettings();
@@ -1915,7 +1920,7 @@ export function setupOrderRobux(discordClient) {
             .addChoices(
               { name: "SeaBank", value: "SEABANK" },
               { name: "QRIS Statis", value: "QRIS" },
-              { name: "QRIS BagiBagi", value: "QRIS_BAGIBAGI" },
+              { name: "QRIS Auto", value: "QRIS_AUTO" },
               { name: "Semua metode", value: "ALL" }
             )
         )
@@ -1932,7 +1937,7 @@ export function setupOrderRobux(discordClient) {
             .addChoices(
               { name: "SeaBank", value: "SEABANK" },
               { name: "QRIS Statis", value: "QRIS" },
-              { name: "QRIS BagiBagi", value: "QRIS_BAGIBAGI" },
+              { name: "QRIS Auto", value: "QRIS_AUTO" },
               { name: "Semua metode", value: "ALL" }
             )
         )
@@ -2035,21 +2040,57 @@ export function setupOrderRobux(discordClient) {
         saveOrders();
       }
 
-      const staffSentBagibagiQris =
-        order.status === "AWAITING_BAGIBAGI_QRIS" &&
+      const staffSentAutoQris =
+        order.status === "AWAITING_AUTO_QRIS" &&
         !isCustomer &&
         ((msg.attachments && msg.attachments.size > 0) ||
           msg.embeds?.some((embed) => embed?.image?.url || embed?.thumbnail?.url) ||
           /https?:\/\/\S+\.(?:png|jpe?g|webp)(?:\?\S*)?/i.test(msg.content || ""));
 
-      if (staffSentBagibagiQris) {
+      if (staffSentAutoQris) {
         order.status = "AWAITING_PROOF";
-        order.bagibagiQrisSentAt = nowIso();
-        order.bagibagiQrisMessageId = msg.id;
-        setAutoCloseDeadline(order, AUTO_CLOSE_MINUTES, "bagibagi_qris_sent_by_staff");
+        order.autoQrisSentAt = nowIso();
+        order.autoQrisMessageId = msg.id;
+        setAutoCloseDeadline(order, AUTO_CLOSE_MINUTES, "auto_qris_sent_by_staff");
         orders.set(order.orderId, order);
         saveOrders();
         await syncStockAndPanel(client).catch(() => {});
+
+        // Send payment instructions with 2-minute warning
+        await msg.channel.send({
+          content:
+            `🔔 **SEGERA LAKUKAN PEMBAYARAN VIA QRIS DI BAWAH INI**\n\n` +
+            `📱 Cara pembayaran:\n` +
+            `1️⃣ Scan atau simpan gambar QRIS terlebih dahulu\n` +
+            `2️⃣ Lakukan pembayaran sesuai nominal\n` +
+            `3️⃣ Upload bukti pembayaran di ticket ini\n\n` +
+            `⏰ **QRIS hanya berlaku 2 MENIT!**\n` +
+            `Jika sudah 2 menit, QRIS otomatis terhapus dan kamu harus klik tombol meminta QRIS baru.`,
+        }).catch(() => {});
+
+        // Schedule auto-delete of QRIS message after 2 minutes
+        setTimeout(async () => {
+          try {
+            const channel = await client.channels.fetch(msg.channelId).catch(() => null);
+            if (channel) {
+              const qrisMessage = await channel.messages.fetch(msg.id).catch(() => null);
+              if (qrisMessage) {
+                await qrisMessage.delete("QRIS Auto expired after 2 minutes").catch(() => {});
+                
+                // Send notification that QRIS expired
+                await channel.send({
+                  content:
+                    `⏰ **QRIS TELAH EXPIRED!**\n\n` +
+                    `QRIS pembayaran telah dihapus karena sudah lewat 2 menit.\n` +
+                    `Silakan klik tombol **🟣 QRIS Auto** lagi untuk meminta QRIS baru.`,
+                }).catch(() => {});
+              }
+            }
+          } catch (e) {
+            console.error("Failed to auto-delete QRIS message:", e);
+          }
+        }, 2 * 60 * 1000); // 2 minutes
+
         return;
       }
 
@@ -2057,7 +2098,7 @@ export function setupOrderRobux(discordClient) {
         const hasAnyAttachment = msg.attachments && msg.attachments.size > 0;
         if (!hasAnyAttachment) return;
 
-        const selectedMethod = ["SHOPEEPAY_QRIS_STATIC", "BAGIBAGI_QRIS"].includes(
+        const selectedMethod = ["SHOPEEPAY_QRIS_STATIC", "AUTO_QRIS"].includes(
           order.paymentMethod
         )
           ? order.paymentMethod
@@ -2128,8 +2169,8 @@ export function setupOrderRobux(discordClient) {
             ? "SeaBank"
             : method === "QRIS"
               ? "QRIS Statis"
-              : method === "QRIS_BAGIBAGI"
-                ? "QRIS BagiBagi"
+              : method === "QRIS_AUTO"
+                ? "QRIS Auto"
                 : "semua metode pembayaran";
 
         const qrisWarning =
@@ -2691,7 +2732,7 @@ export function setupOrderRobux(discordClient) {
 
       const needsOrder = [
         "ob_qris",
-        "ob_qris_bagibagi",
+        "ob_qris_auto",
         "ob_bank",
         "ob_cancel_user",
         "ob_copy_username",
@@ -2772,10 +2813,10 @@ ${getPaymentTotal(order)}
         });
       }
 
-      if (key === "ob_qris_bagibagi") {
-        if (!isQrisBagibagiEnabled() && order.paymentMethod !== "BAGIBAGI_QRIS") {
+      if (key === "ob_qris_auto") {
+        if (!isQrisAutoEnabled() && order.paymentMethod !== "AUTO_QRIS") {
           return i.reply({
-            content: "⛔ Pembayaran via QRIS BagiBagi sedang dinonaktifkan oleh staff.",
+            content: "⛔ Pembayaran via QRIS Auto sedang dinonaktifkan oleh staff.",
             ephemeral: true,
           });
         }
@@ -2786,11 +2827,11 @@ ${getPaymentTotal(order)}
           return i.reply({ content: "Kamu tidak punya akses untuk order ini.", ephemeral: true });
         }
 
-        if (order.paymentMethod && order.paymentMethod !== "BAGIBAGI_QRIS") {
+        if (order.paymentMethod && order.paymentMethod !== "AUTO_QRIS") {
           return i.reply({
             content:
               `Metode pembayaran order ini sudah dikunci ke **${getPaymentMethodLabel(order)}**. ` +
-              "Jika ingin QRIS BagiBagi, close order lalu buat order baru.",
+              "Jika ingin QRIS Auto, close order lalu buat order baru.",
             ephemeral: true,
           });
         }
@@ -2812,7 +2853,7 @@ ${getPaymentTotal(order)}
           });
         }
 
-        if (order.status === "AWAITING_BAGIBAGI_QRIS" && order.paymentMethod === "BAGIBAGI_QRIS") {
+        if (order.status === "AWAITING_AUTO_QRIS" && order.paymentMethod === "AUTO_QRIS") {
           return i.reply({
             content: "⏳ Mohon tunggu sebentar, QRIS pembayaran sedang dibuat oleh Owner/Staff.",
             ephemeral: true,
@@ -2820,15 +2861,15 @@ ${getPaymentTotal(order)}
         }
 
         const total = getBankTotal(order);
-        order.paymentMethod = "BAGIBAGI_QRIS";
+        order.paymentMethod = "AUTO_QRIS";
         order.paymentAmount = total;
         order.qrisTotal = total;
         order.total = total;
-        order.status = "AWAITING_BAGIBAGI_QRIS";
+        order.status = "AWAITING_AUTO_QRIS";
         order.autoCloseEnabled = false;
         order.autoClosePaused = true;
         order.autoCloseDeadlineAt = null;
-        touchActivity(order, "bagibagi_qris_requested");
+        touchActivity(order, "auto_qris_requested");
         orders.set(order.orderId, order);
         saveOrders();
 
