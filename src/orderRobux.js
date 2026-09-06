@@ -2018,6 +2018,8 @@ export function setupOrderRobux(discordClient) {
       const order = Array.from(orders.values()).find((o) => o.channelId === msg.channelId);
       if (!order) return;
 
+      console.log(`[Message Debug] Order found: ${order.orderId}, Status: ${order.status}, Author: ${msg.author.id}, Customer ID: ${order.userId}`);
+
       const isCustomer = msg.author.id === order.userId;
 
       touchActivity(order, isCustomer ? "customer_message" : "staff_or_other_message");
