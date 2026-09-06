@@ -2043,13 +2043,95 @@ export function setupOrderRobux(discordClient) {
           /https?:\/\/\S+\.(?:png|jpe?g|webp)(?:\?\S*)?/i.test(msg.content || ""));
 
       if (staffSentAutoQris) {
+        // Extract image/attachment from staff message
+        let qrisAttachment = null;
+        let qrisImageUrl = null;
+
+        // Check for attachments
+        if (msg.attachments && msg.attachments.size > 0) {
+          const imageAttachment = msg.attachments.find(att => 
+            att.contentType?.startsWith('image/') || 
+            att.name?.match(/\.(png|jpe?g|webp)$/i)
+          );
+          if (imageAttachment) {
+            qrisAttachment = imageAttachment;
+            qrisImageUrl = imageAttachment.url;
+          }
+        }
+
+        // Check for embed images
+        if (!qrisImageUrl && msg.embeds) {
+          for (const embed of msg.embeds) {
+            if (embed.image?.url) {
+              qrisImageUrl = embed.image.url;
+              break;
+            }
+            if (embed.thumbnail?.url) {
+              qrisImageUrl = embed.thumbnail.url;
+              break;
+            }
+          }
+        }
+
+        // Check for image URLs in message content
+        if (!qrisImageUrl) {
+          const urlMatch = msg.content?.match(/https?:\/\/\S+\.(?:png|jpe?g|webp)(?:\?\S*)?/i);
+          if (urlMatch) {
+            qrisImageUrl = urlMatch[0];
+          }
+        }
+
+        if (!qrisImageUrl) {
+          console.error("No QRIS image found in staff message");
+          return;
+        }
+
+        // Delete staff's message
+        await msg.delete("Staff QRIS message - will be resent by bot").catch(() => {});
+
+        // Update order status
         order.status = "AWAITING_PROOF";
         order.autoQrisSentAt = nowIso();
-        order.autoQrisMessageId = msg.id;
         setAutoCloseDeadline(order, AUTO_CLOSE_MINUTES, "auto_qris_sent_by_staff");
         orders.set(order.orderId, order);
         saveOrders();
         await syncStockAndPanel(client).catch(() => {});
+
+        // Send QRIS image using bot account
+        let botQrisMessage = null;
+        try {
+          if (qrisAttachment) {
+            // Send as attachment
+            const response = await fetch(qrisImageUrl);
+            const buffer = await response.arrayBuffer();
+            const attachment = new AttachmentBuilder(Buffer.from(buffer), {
+              name: qrisAttachment.name || 'qris.png',
+              description: 'QRIS Pembayaran'
+            });
+            
+            botQrisMessage = await msg.channel.send({
+              files: [attachment],
+              content: `📱 **QRIS Pembayaran - ${order.orderId}**`
+            });
+          } else {
+            // Send as embed with image
+            botQrisMessage = await msg.channel.send({
+              embeds: [
+                new EmbedBuilder()
+                  .setTitle(`📱 QRIS Pembayaran - ${order.orderId}`)
+                  .setImage(qrisImageUrl)
+                  .setColor(0x9b59b6)
+                  .setFooter({ text: "BLOXBUX — QRIS Auto" })
+              ]
+            });
+          }
+        } catch (e) {
+          console.error("Failed to send QRIS image via bot:", e);
+          await msg.channel.send({
+            content: "❌ Gagal mengirim gambar QRIS. Silakan coba lagi."
+          }).catch(() => {});
+          return;
+        }
 
         // Send payment instructions with 2-minute warning
         const instructionMessage = await msg.channel.send({
@@ -2067,15 +2149,14 @@ export function setupOrderRobux(discordClient) {
           console.error("Failed to send QRIS instruction message");
         }
 
-        // Schedule auto-delete of QRIS message after 2 minutes
+        // Schedule auto-delete of bot's QRIS message after 2 minutes
         setTimeout(async () => {
           try {
             const channel = await client.channels.fetch(msg.channelId).catch(() => null);
             if (channel) {
-              // Delete the staff's QRIS message
-              const qrisMessage = await channel.messages.fetch(msg.id).catch(() => null);
-              if (qrisMessage) {
-                await qrisMessage.delete("QRIS Auto expired after 2 minutes").catch(() => {});
+              // Delete the bot's QRIS message
+              if (botQrisMessage) {
+                await botQrisMessage.delete("QRIS Auto expired after 2 minutes").catch(() => {});
               }
               
               // Delete the instruction message
