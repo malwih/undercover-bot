@@ -2012,14 +2012,28 @@ export function setupOrderRobux(discordClient) {
                 currentOrder.paymentMethod === "AUTO_QRIS" &&
                 currentOrder.status === "AWAITING_PROOF"
               ) {
-                await channel
+                const retryMessage = await channel
                   .send({
                     content:
                       `⏰ **QRIS ${currentOrder.orderId} sudah terhapus setelah 2 menit.**\n` +
-                      `Jika belum sempat membayar, klik tombol **🟣 QRIS Auto** lagi untuk meminta QRIS baru.`,
+                      `Jika pembayaran belum dilakukan, silakan klik tombol **🟣 Minta QRIS Baru** di bawah.`,
+                    components: [
+                      new ActionRowBuilder().addComponents(
+                        new ButtonBuilder()
+                          .setCustomId(`ob_qris_auto_retry:${currentOrder.orderId}`)
+                          .setLabel("🟣 Minta QRIS Baru")
+                          .setStyle(ButtonStyle.Primary)
+                      ),
+                    ],
                     allowedMentions: { parse: [] },
                   })
-                  .catch(() => {});
+                  .catch(() => null);
+
+                if (retryMessage) {
+                  currentOrder.autoQrisRetryMessageId = retryMessage.id;
+                  orders.set(currentOrder.orderId, currentOrder);
+                  saveOrders();
+                }
               }
             } catch (e) {
               console.error("Failed to auto-delete QRIS Auto message:", e);
@@ -2822,6 +2836,7 @@ export function setupOrderRobux(discordClient) {
       const needsOrder = [
         "ob_qris",
         "ob_qris_auto",
+        "ob_qris_auto_retry",
         "ob_bank",
         "ob_cancel_user",
         "ob_copy_username",
@@ -2900,6 +2915,92 @@ ${getPaymentTotal(order)}
 **Format:** Rp ${fmtIDR(getPaymentTotal(order))}`,
           ephemeral: true,
         });
+      }
+
+      if (key === "ob_qris_auto_retry") {
+        if (!isQrisAutoEnabled() && order.paymentMethod !== "AUTO_QRIS") {
+          return i.reply({
+            content: "⛔ Pembayaran via QRIS Auto sedang dinonaktifkan oleh staff.",
+            ephemeral: true,
+          });
+        }
+
+        const member = await i.guild.members.fetch(i.user.id).catch(() => null);
+        const allowed = i.user.id === order.userId || isStaff(member);
+        if (!allowed) {
+          return i.reply({
+            content: "Kamu tidak punya akses untuk meminta QRIS order ini.",
+            ephemeral: true,
+          });
+        }
+
+        if (order.paymentMethod !== "AUTO_QRIS") {
+          return i.reply({
+            content: "Tombol ini hanya berlaku untuk order dengan metode QRIS Auto.",
+            ephemeral: true,
+          });
+        }
+
+        if (["PAID", "DONE", "PROOF_SUBMITTED"].includes(order.status)) {
+          return i.reply({
+            content:
+              order.status === "PROOF_SUBMITTED"
+                ? "✅ Bukti pembayaran sudah dikirim dan sedang menunggu pengecekan staff."
+                : "✅ Pembayaran/order ini sudah diproses.",
+            ephemeral: true,
+          });
+        }
+
+        if (["CANCELLED", "EXPIRED", "CLOSED"].includes(order.status)) {
+          return i.reply({
+            content: "Order ini sudah ditutup/expired dan tidak bisa meminta QRIS baru.",
+            ephemeral: true,
+          });
+        }
+
+        if (
+          order.autoQrisRetryMessageId &&
+          i.message?.id !== order.autoQrisRetryMessageId
+        ) {
+          return i.reply({
+            content: "Tombol permintaan QRIS ini sudah tidak berlaku. Gunakan tombol terbaru.",
+            ephemeral: true,
+          });
+        }
+
+        if (order.status === "AWAITING_AUTO_QRIS") {
+          return i.reply({
+            content: "⏳ Permintaan QRIS baru sudah dikirim. Mohon tunggu Owner/Staff mengirim gambar QRIS.",
+            ephemeral: true,
+          });
+        }
+
+        if (order.status !== "AWAITING_PROOF" || order.autoQrisBotMessageId) {
+          return i.reply({
+            content: "QRIS baru belum dapat diminta pada status order saat ini.",
+            ephemeral: true,
+          });
+        }
+
+        order.status = "AWAITING_AUTO_QRIS";
+        order.autoCloseEnabled = false;
+        order.autoClosePaused = true;
+        order.autoCloseDeadlineAt = null;
+        order.autoQrisRetryMessageId = null;
+        touchActivity(order, "auto_qris_retry_requested");
+        orders.set(order.orderId, order);
+        saveOrders();
+
+        await i.update({
+          content:
+            `⏳ **Permintaan QRIS baru untuk ${order.orderId} sudah dikirim.**\n` +
+            `Mohon tunggu Owner/Staff mengirim gambar QRIS baru.`,
+          components: [],
+          allowedMentions: { parse: [] },
+        });
+
+        await syncStockAndPanel(client).catch(() => {});
+        return;
       }
 
       if (key === "ob_qris_auto") {
