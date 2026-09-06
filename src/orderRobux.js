@@ -2014,7 +2014,7 @@ export function setupOrderRobux(discordClient) {
   // ========= MESSAGE TRACKING =========
   console.log("[setupOrderRobux] Registering messageCreate event listener...");
   client.on("messageCreate", async (msg) => {
-    console.log(`[Message Debug] Message received in channel ${msg.channelId} from ${msg.author.id}`);
+    console.log(`[Message Debug] RAW message received - Channel: ${msg.channelId}, Author: ${msg.author.id}, Bot: ${msg.author.bot}, Guild: ${!!msg.guild}`);
     try {
       if (!msg.guild || msg.author.bot) {
         console.log(`[Message Debug] Message filtered: guild=${!!msg.guild}, bot=${msg.author.bot}`);
