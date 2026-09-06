@@ -2052,7 +2052,7 @@ export function setupOrderRobux(discordClient) {
         await syncStockAndPanel(client).catch(() => {});
 
         // Send payment instructions with 2-minute warning
-        await msg.channel.send({
+        const instructionMessage = await msg.channel.send({
           content:
             `🔔 **SEGERA LAKUKAN PEMBAYARAN VIA QRIS DI BAWAH INI**\n\n` +
             `📱 Cara pembayaran:\n` +
@@ -2061,25 +2061,35 @@ export function setupOrderRobux(discordClient) {
             `3️⃣ Upload bukti pembayaran di ticket ini\n\n` +
             `⏰ **QRIS hanya berlaku 2 MENIT!**\n` +
             `Jika sudah 2 menit, QRIS otomatis terhapus dan kamu harus klik tombol meminta QRIS baru.`,
-        }).catch(() => {});
+        });
+
+        if (!instructionMessage) {
+          console.error("Failed to send QRIS instruction message");
+        }
 
         // Schedule auto-delete of QRIS message after 2 minutes
         setTimeout(async () => {
           try {
             const channel = await client.channels.fetch(msg.channelId).catch(() => null);
             if (channel) {
+              // Delete the staff's QRIS message
               const qrisMessage = await channel.messages.fetch(msg.id).catch(() => null);
               if (qrisMessage) {
                 await qrisMessage.delete("QRIS Auto expired after 2 minutes").catch(() => {});
-                
-                // Send notification that QRIS expired
-                await channel.send({
-                  content:
-                    `⏰ **QRIS TELAH EXPIRED!**\n\n` +
-                    `QRIS pembayaran telah dihapus karena sudah lewat 2 menit.\n` +
-                    `Silakan klik tombol **🟣 QRIS Auto** lagi untuk meminta QRIS baru.`,
-                }).catch(() => {});
               }
+              
+              // Delete the instruction message
+              if (instructionMessage) {
+                await instructionMessage.delete().catch(() => {});
+              }
+              
+              // Send notification that QRIS expired
+              await channel.send({
+                content:
+                  `⏰ **QRIS TELAH EXPIRED!**\n\n` +
+                  `QRIS pembayaran telah dihapus karena sudah lewat 2 menit.\n` +
+                  `Silakan klik tombol **🟣 QRIS Auto** lagi untuk meminta QRIS baru.`,
+              }).catch(() => {});
             }
           } catch (e) {
             console.error("Failed to auto-delete QRIS message:", e);
