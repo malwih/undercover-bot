@@ -1851,251 +1851,237 @@ function buildPaymentSettingsStatus() {
 
 export function setupOrderRobux(discordClient) {
   client = discordClient;
-  console.log("[setupOrderRobux] Function called, setting up order system...");
   loadOrders();
   loadOrderSettings();
   loadPaymentSettings();
   
-  let readyHandlerExecuted = false;
-  client.on("ready", async () => {
-    if (readyHandlerExecuted) return;
-    readyHandlerExecuted = true;
-    
-    console.log(`Logged in as ${client.user.tag}`);
+  // ========= MESSAGE TRACKING =========
+  client.on("messageCreate", async (msg) => {
+    try {
+      if (!msg.guild || msg.author.bot) return;
 
-    if (!isStaticQrisConfigured()) {
-      console.warn(
-        `⚠️ Gambar QRIS statis belum ditemukan. Tombol Bayar QRIS dinonaktifkan. Path: ${QRIS_STATIC_IMAGE_PATH}`
-      );
-    } else {
-      console.log(`✅ QRIS tersedia: ${QRIS_STATIC_IMAGE_PATH}`);
-    }
+      const order = Array.from(orders.values()).find((o) => o.channelId === msg.channelId);
+      if (!order) return;
 
-    setInterval(() => runAutoCloseSweep(client), 60 * 1000).unref();
+      const isCustomer = msg.author.id === order.userId;
+      const senderMember = msg.member || (await msg.guild.members.fetch(msg.author.id).catch(() => null));
+      const senderIsStaffOrOwner =
+        msg.author.id === msg.guild.ownerId || isStaff(senderMember);
 
-    const guild = await client.guilds.fetch(GUILD_ID);
+      touchActivity(order, isCustomer ? "customer_message" : "staff_or_other_message");
 
-    // ========= MESSAGE TRACKING =========
-    console.log("[setupOrderRobux] Registering messageCreate event listener inside ready...");
-    client.on("messageCreate", async (msg) => {
-      console.log(`[Message Debug] RAW message received - Channel: ${msg.channelId}, Author: ${msg.author.id}, Bot: ${msg.author.bot}, Guild: ${!!msg.guild}`);
-      try {
-        if (!msg.guild || msg.author.bot) {
-          console.log(`[Message Debug] Message filtered: guild=${!!msg.guild}, bot=${msg.author.bot}`);
-          return;
+      if (order.status === "DONE") {
+        bumpAutoCloseDeadline(order, AUTO_CLOSE_MINUTES, "message_after_done");
+        orders.set(order.orderId, order);
+        saveOrders();
+        return;
+      }
+
+      if (order.status === "AWAITING_PAYMENT" || order.status === "AWAITING_PROOF") {
+        bumpAutoCloseDeadline(order, AUTO_CLOSE_MINUTES, "message_before_done");
+        orders.set(order.orderId, order);
+        saveOrders();
+      }
+
+      // QRIS Auto hanya boleh dipenuhi oleh Staff Role atau Guild Owner.
+      if (
+        order.status === "AWAITING_AUTO_QRIS" &&
+        order.paymentMethod === "AUTO_QRIS" &&
+        senderIsStaffOrOwner
+      ) {
+        let qrisImageUrl = null;
+        let qrisFileName = `qris-${order.orderId}.png`;
+
+        const imageAttachment = msg.attachments?.find(
+          (att) =>
+            att.contentType?.startsWith("image/") ||
+            /\.(png|jpe?g|webp)$/i.test(att.name || "")
+        );
+
+        if (imageAttachment?.url) {
+          qrisImageUrl = imageAttachment.url;
+          if (imageAttachment.name) qrisFileName = imageAttachment.name;
         }
 
-        const order = Array.from(orders.values()).find((o) => o.channelId === msg.channelId);
-        if (!order) {
-          console.log(`[Message Debug] No order found for channel ${msg.channelId}`);
-          return;
-        }
-
-        console.log(`[Message Debug] Order found: ${order.orderId}, Status: ${order.status}, Author: ${msg.author.id}, Customer ID: ${order.userId}`);
-
-        const isCustomer = msg.author.id === order.userId;
-
-        touchActivity(order, isCustomer ? "customer_message" : "staff_or_other_message");
-
-        if (order.status === "DONE") {
-          bumpAutoCloseDeadline(order, AUTO_CLOSE_MINUTES, "message_after_done");
-          orders.set(order.orderId, order);
-          saveOrders();
-          return;
-        }
-
-        if (order.status === "AWAITING_PAYMENT" || order.status === "AWAITING_PROOF") {
-          bumpAutoCloseDeadline(order, AUTO_CLOSE_MINUTES, "message_before_done");
-          orders.set(order.orderId, order);
-          saveOrders();
-        }
-
-        const staffSentAutoQris =
-          order.status === "AWAITING_AUTO_QRIS" &&
-          !isCustomer &&
-          ((msg.attachments && msg.attachments.size > 0) ||
-            msg.embeds?.some((embed) => embed?.image?.url || embed?.thumbnail?.url) ||
-            /https?:\/\/\S+\.(?:png|jpe?g|webp)(?:\?\S*)?/i.test(msg.content || ""));
-
-        console.log(`[QRIS Auto Debug] Order ID: ${order?.orderId || "N/A"}, Status: ${order?.status || "N/A"}, isCustomer: ${isCustomer}, hasAttachments: ${!!(msg.attachments && msg.attachments.size > 0)}, staffSentAutoQris: ${staffSentAutoQris}`);
-
-        if (staffSentAutoQris) {
-          // Extract image/attachment from staff message
-          let qrisAttachment = null;
-          let qrisImageUrl = null;
-
-          // Check for attachments
-          if (msg.attachments && msg.attachments.size > 0) {
-            const imageAttachment = msg.attachments.find(att => 
-              att.contentType?.startsWith('image/') || 
-              att.name?.match(/\.(png|jpe?g|webp)$/i)
-            );
-            if (imageAttachment) {
-              qrisAttachment = imageAttachment;
-              qrisImageUrl = imageAttachment.url;
+        if (!qrisImageUrl && msg.embeds?.length) {
+          for (const embed of msg.embeds) {
+            const embedImageUrl = embed?.image?.url || embed?.thumbnail?.url;
+            if (embedImageUrl) {
+              qrisImageUrl = embedImageUrl;
+              break;
             }
           }
+        }
 
-          // Check for embed images
-          if (!qrisImageUrl && msg.embeds) {
-            for (const embed of msg.embeds) {
-              if (embed.image?.url) {
-                qrisImageUrl = embed.image.url;
-                break;
-              }
-              if (embed.thumbnail?.url) {
-                qrisImageUrl = embed.thumbnail.url;
-                break;
-              }
-            }
+        if (!qrisImageUrl) {
+          const urlMatch = String(msg.content || "").match(
+            /https?:\/\/\S+\.(?:png|jpe?g|webp)(?:\?\S*)?/i
+          );
+          if (urlMatch) qrisImageUrl = urlMatch[0];
+        }
+
+        // Pesan staff tanpa gambar tetap dibiarkan sebagai chat biasa.
+        if (!qrisImageUrl) return;
+
+        let botQrisMessage = null;
+
+        try {
+          // Ambil bytes gambar terlebih dahulu. Pesan staff belum dihapus pada tahap ini.
+          const response = await fetch(qrisImageUrl);
+          if (!response.ok) {
+            throw new Error(`QRIS image download failed with HTTP ${response.status}`);
           }
 
-          // Check for image URLs in message content
-          if (!qrisImageUrl) {
-            const urlMatch = msg.content?.match(/https?:\/\/\S+\.(?:png|jpe?g|webp)(?:\?\S*)?/i);
-            if (urlMatch) {
-              qrisImageUrl = urlMatch[0];
-            }
+          const responseContentType = String(response.headers.get("content-type") || "");
+          if (
+            !imageAttachment &&
+            responseContentType &&
+            !responseContentType.toLowerCase().startsWith("image/")
+          ) {
+            throw new Error("QRIS URL does not return an image.");
           }
 
-          if (!qrisImageUrl) {
-            console.error("No QRIS image found in staff message");
-            return;
+          const imageBuffer = Buffer.from(await response.arrayBuffer());
+          if (!imageBuffer.length) throw new Error("QRIS image is empty.");
+
+          // Rapikan nama file agar aman saat di-upload ulang oleh bot.
+          qrisFileName = String(qrisFileName || `qris-${order.orderId}.png`)
+            .replace(/[^a-zA-Z0-9._-]/g, "-")
+            .slice(0, 100);
+
+          if (!/\.(png|jpe?g|webp)$/i.test(qrisFileName)) {
+            const ext = responseContentType.toLowerCase().includes("jpeg")
+              ? ".jpg"
+              : responseContentType.toLowerCase().includes("webp")
+                ? ".webp"
+                : ".png";
+            qrisFileName = `qris-${order.orderId}${ext}`;
           }
 
-          // Delete staff's message
-          await msg.delete("Staff QRIS message - will be resent by bot").catch(() => {});
+          const botAttachment = new AttachmentBuilder(imageBuffer, {
+            name: qrisFileName,
+            description: `QRIS Pembayaran ${order.orderId}`,
+          });
 
-          // Update order status
+          botQrisMessage = await msg.channel.send({
+            content:
+              `💳 **LAKUKAN PEMBAYARAN KE QRIS INI**\n\n` +
+              `🧾 **Order:** ${order.orderId}\n` +
+              `💰 **Total pembayaran:** Rp ${fmtIDR(getPaymentTotal(order))}\n\n` +
+              `📱 Scan/simpan gambar QRIS di bawah lalu lakukan pembayaran.\n` +
+              `✅ Setelah pembayaran berhasil, kirim **bukti pembayaran** di ticket ini.\n\n` +
+              `⏳ **Gambar QRIS ini akan terhapus otomatis setelah 2 menit.**`,
+            files: [botAttachment],
+            allowedMentions: { parse: [] },
+          });
+
+          // Setelah bot sukses mengirim ulang, hapus pesan asli Staff/Owner.
+          await msg.delete().catch(() => {});
+
           order.status = "AWAITING_PROOF";
           order.autoQrisSentAt = nowIso();
+          order.autoQrisBotMessageId = botQrisMessage.id;
+          order.autoQrisExpiresAt = new Date(Date.now() + 2 * 60 * 1000).toISOString();
           setAutoCloseDeadline(order, AUTO_CLOSE_MINUTES, "auto_qris_sent_by_staff");
           orders.set(order.orderId, order);
           saveOrders();
           await syncStockAndPanel(client).catch(() => {});
 
-          // Send QRIS image using bot account
-          let botQrisMessage = null;
-          try {
-            if (qrisAttachment) {
-              // Send as attachment
-              const response = await fetch(qrisImageUrl);
-              const buffer = await response.arrayBuffer();
-              const attachment = new AttachmentBuilder(Buffer.from(buffer), {
-                name: qrisAttachment.name || 'qris.png',
-                description: 'QRIS Pembayaran'
-              });
-              
-              botQrisMessage = await msg.channel.send({
-                files: [attachment],
-                content: `📱 **QRIS Pembayaran - ${order.orderId}**`
-              });
-            } else {
-              // Send as embed with image
-              botQrisMessage = await msg.channel.send({
-                embeds: [
-                  new EmbedBuilder()
-                    .setTitle(`📱 QRIS Pembayaran - ${order.orderId}`)
-                    .setImage(qrisImageUrl)
-                    .setColor(0x9b59b6)
-                    .setFooter({ text: "BLOXBUX — QRIS Auto" })
-                ]
-              });
-            }
-          } catch (e) {
-            console.error("Failed to send QRIS image via bot:", e);
-            await msg.channel.send({
-              content: "❌ Gagal mengirim gambar QRIS. Silakan coba lagi."
-            }).catch(() => {});
-            return;
-          }
-
-          // Send payment instructions with 2-minute warning
-          const instructionMessage = await msg.channel.send({
-            content:
-              `🔔 **SEGERA LAKUKAN PEMBAYARAN VIA QRIS DI BAWAH INI**\n\n` +
-              `📱 Cara pembayaran:\n` +
-              `1️⃣ Scan atau simpan gambar QRIS terlebih dahulu\n` +
-              `2️⃣ Lakukan pembayaran sesuai nominal\n` +
-              `3️⃣ Upload bukti pembayaran di ticket ini\n\n` +
-              `⏰ **QRIS hanya berlaku 2 MENIT!**\n` +
-              `Jika sudah 2 menit, QRIS otomatis terhapus dan kamu harus klik tombol meminta QRIS baru.`,
-          });
-
-          if (!instructionMessage) {
-            console.error("Failed to send QRIS instruction message");
-          }
-
-          // Schedule auto-delete of bot's QRIS message after 2 minutes
           setTimeout(async () => {
             try {
+              const currentOrder = orders.get(order.orderId);
               const channel = await client.channels.fetch(msg.channelId).catch(() => null);
-              if (channel) {
-                // Delete the bot's QRIS message
-                if (botQrisMessage) {
-                  await botQrisMessage.delete("QRIS Auto expired after 2 minutes").catch(() => {});
-                }
-                
-                // Delete the instruction message
-                if (instructionMessage) {
-                  await instructionMessage.delete().catch(() => {});
-                }
-                
-                // Send notification that QRIS expired
-                await channel.send({
-                  content:
-                    `⏰ **QRIS TELAH EXPIRED!**\n\n` +
-                    `QRIS pembayaran telah dihapus karena sudah lewat 2 menit.\n` +
-                    `Silakan klik tombol **🟣 QRIS Auto** lagi untuk meminta QRIS baru.`,
-                }).catch(() => {});
+
+              if (channel && botQrisMessage) {
+                await botQrisMessage.delete().catch(() => {});
+              }
+
+              if (
+                currentOrder &&
+                currentOrder.autoQrisBotMessageId === botQrisMessage?.id
+              ) {
+                currentOrder.autoQrisBotMessageId = null;
+                currentOrder.autoQrisExpiresAt = null;
+                orders.set(currentOrder.orderId, currentOrder);
+                saveOrders();
+              }
+
+              if (
+                channel &&
+                currentOrder &&
+                currentOrder.paymentMethod === "AUTO_QRIS" &&
+                currentOrder.status === "AWAITING_PROOF"
+              ) {
+                await channel
+                  .send({
+                    content:
+                      `⏰ **QRIS ${currentOrder.orderId} sudah terhapus setelah 2 menit.**\n` +
+                      `Jika belum sempat membayar, klik tombol **🟣 QRIS Auto** lagi untuk meminta QRIS baru.`,
+                    allowedMentions: { parse: [] },
+                  })
+                  .catch(() => {});
               }
             } catch (e) {
-              console.error("Failed to auto-delete QRIS message:", e);
+              console.error("Failed to auto-delete QRIS Auto message:", e);
             }
-          }, 2 * 60 * 1000); // 2 minutes
+          }, 2 * 60 * 1000).unref?.();
 
           return;
-        }
-
-        if (order.status === "AWAITING_PROOF" && isCustomer) {
-          const hasAnyAttachment = msg.attachments && msg.attachments.size > 0;
-          if (!hasAnyAttachment) return;
-
-          const selectedMethod = ["SHOPEEPAY_QRIS_STATIC", "AUTO_QRIS"].includes(
-            order.paymentMethod
-          )
-            ? order.paymentMethod
-            : "SEABANK_TRANSFER";
-          const paymentTotal = getPaymentTotal(order);
-
-          order.status = "PROOF_SUBMITTED";
-          order.paymentMethod = selectedMethod;
-          order.paymentAmount = paymentTotal;
-          order.total = paymentTotal;
-          order.proofSubmittedAt = nowIso();
-          order.proofAttachments = Array.from(msg.attachments.values()).map((att) => ({
-            url: att.url,
-            name: att.name,
-          }));
-          setAutoCloseDeadline(order, AUTO_CLOSE_MINUTES, "proof_submitted");
-          orders.set(order.orderId, order);
-          saveOrders();
-          await syncStockAndPanel(client).catch(() => {});
-
-          await msg.channel.send({
-            content:
-              `✅ **Bukti pembayaran diterima!**\n\n` +
-              `📋 **Metode:** ${getPaymentMethodLabel(order)}\n` +
-              `💰 **Total:** Rp ${fmtIDR(paymentTotal)}\n\n` +
-              `👮 Staff akan mengecek bukti pembayaran kamu segera.`,
-          });
-
+        } catch (e) {
+          console.error("Failed to resend QRIS Auto image via bot:", e);
+          await msg.channel
+            .send({
+              content:
+                "❌ Bot gagal menyalin gambar QRIS. Pesan Staff/Owner tidak dihapus. Silakan kirim ulang gambar QRIS.",
+              allowedMentions: { parse: [] },
+            })
+            .catch(() => {});
           return;
         }
-      } catch (e) {
-        console.error("messageCreate error:", e);
       }
-    });
+
+      if (order.status === "AWAITING_PROOF" && isCustomer) {
+        const hasAnyAttachment = msg.attachments && msg.attachments.size > 0;
+        if (!hasAnyAttachment) return;
+
+        const selectedMethod = ["SHOPEEPAY_QRIS_STATIC", "AUTO_QRIS"].includes(
+          order.paymentMethod
+        )
+          ? order.paymentMethod
+          : "SEABANK_TRANSFER";
+        const paymentTotal = getPaymentTotal(order);
+
+        order.status = "PROOF_SUBMITTED";
+        order.paymentMethod = selectedMethod;
+        order.paymentAmount = paymentTotal;
+        order.total = paymentTotal;
+        order.proofSubmittedAt = nowIso();
+        order.proofAttachments = Array.from(msg.attachments.values()).map((att) => ({
+          url: att.url,
+          name: att.name,
+        }));
+        setAutoCloseDeadline(order, AUTO_CLOSE_MINUTES, "proof_submitted");
+        orders.set(order.orderId, order);
+        saveOrders();
+        await syncStockAndPanel(client).catch(() => {});
+
+        await msg.channel.send({
+          content:
+            `✅ **Bukti pembayaran diterima!**\n\n` +
+            `📋 **Metode:** ${getPaymentMethodLabel(order)}\n` +
+            `💰 **Total:** Rp ${fmtIDR(paymentTotal)}\n\n` +
+            `👮 Staff akan mengecek bukti pembayaran kamu segera.`,
+        });
+
+        return;
+      }
+    } catch (e) {
+      console.error("messageCreate error:", e);
+    }
+  });
+
+  const initializeOrderSystem = async () => {
+    const guild = await client.guilds.fetch(GUILD_ID);
 
     await upsertGuildCommands(guild, [
       new SlashCommandBuilder()
@@ -2222,10 +2208,6 @@ export function setupOrderRobux(discordClient) {
       );
     }
 
-    console.log(
-      "Slash commands /proses, /order, /enable, /disable, /minimalorder, and /stokrobux registered."
-    );
-
     // Sinkronkan stok/panel saat startup tanpa broadcast restart/redeploy.
     await syncStockAndPanel(client, { suppressBroadcast: true });
 
@@ -2236,7 +2218,19 @@ export function setupOrderRobux(discordClient) {
         console.error("stock/panel interval error:", e);
       }
     }, STOCK_REFRESH_MINUTES * 60 * 1000).unref();
-  });
+  };
+
+  if (client.isReady()) {
+    void initializeOrderSystem().catch((e) => {
+      console.error("Order system initialization error:", e);
+    });
+  } else {
+    client.once("ready", () => {
+      void initializeOrderSystem().catch((e) => {
+        console.error("Order system initialization error:", e);
+      });
+    });
+  }
 
   // ========= INTERACTIONS =========
   client.on("interactionCreate", async (i) => {
