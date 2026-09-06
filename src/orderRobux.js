@@ -2042,6 +2042,8 @@ export function setupOrderRobux(discordClient) {
           msg.embeds?.some((embed) => embed?.image?.url || embed?.thumbnail?.url) ||
           /https?:\/\/\S+\.(?:png|jpe?g|webp)(?:\?\S*)?/i.test(msg.content || ""));
 
+      console.log(`[QRIS Auto Debug] Order ID: ${order?.orderId || "N/A"}, Status: ${order?.status || "N/A"}, isCustomer: ${isCustomer}, hasAttachments: ${!!(msg.attachments && msg.attachments.size > 0)}, staffSentAutoQris: ${staffSentAutoQris}`);
+
       if (staffSentAutoQris) {
         // Extract image/attachment from staff message
         let qrisAttachment = null;
