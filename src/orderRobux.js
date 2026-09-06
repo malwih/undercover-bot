@@ -47,15 +47,15 @@ const QRIS_STATIC_IMAGE_PATH = path.resolve(
   String(process.env.QRIS_STATIC_IMAGE_PATH || "./assets/qris-shopeepay.png").trim()
 );
 const QRIS_STATIC_MERCHANT_NAME = String(
-  process.env.QRIS_STATIC_MERCHANT_NAME || "UNDERCOVER"
+  process.env.QRIS_STATIC_MERCHANT_NAME || "BLOXBUX"
 ).trim();
 
 const PRICE_PER_1000 = Number(process.env.PRICE_PER_1000 || 100000);
 const QRIS_ADMIN_PERCENT = Number(process.env.QRIS_ADMIN_PERCENT || 1);
 const AUTO_CLOSE_MINUTES = Number(process.env.AUTO_CLOSE_MINUTES || 30);
 
-const STORE_NAME = process.env.STORE_NAME || "UNDERCOVER";
-const STORE_FOOTER = process.env.STORE_FOOTER || "UNDERCOVER — Invoice System";
+const STORE_NAME = process.env.STORE_NAME || "BLOXBUX";
+const STORE_FOOTER = process.env.STORE_FOOTER || "BLOXBUX — Invoice System";
 const STOCK_REFRESH_MINUTES = Number(process.env.STOCK_REFRESH_MINUTES || 2);
 
 if (!DISCORD_TOKEN) throw new Error("Missing DISCORD_TOKEN");
@@ -553,7 +553,7 @@ function buildQrisStaticEmbed(order) {
       ].join("\n")
     )
     .setColor(0xee4d2d)
-    .setFooter({ text: "UNDERCOVER — QRIS Payment" });
+    .setFooter({ text: "BLOXBUX — QRIS Payment" });
 }
 
 function buildQrisStaticPayload(order) {
@@ -673,7 +673,7 @@ async function robloxGetGroupFunds(groupId) {
     method: "GET",
     headers: {
       Cookie: `.ROBLOSECURITY=${ROBLOX_COOKIE}`,
-      "User-Agent": "UNDERCOVER-StockBot/1.0",
+      "User-Agent": "BLOXBUX-StockBot/1.0",
     },
   });
 
@@ -966,7 +966,7 @@ function buildPanelEmbed() {
         "⚠️ **Metode pembayaran terkunci setelah dipilih. Jika salah pilih, close order lalu buat order baru.**",
       ].join("\n")
     )
-    .setFooter({ text: "UNDERCOVER — Order Robux System" });
+    .setFooter({ text: "BLOXBUX — Order Robux System" });
 }
 
 function buildStockStatusButton() {
@@ -1050,7 +1050,7 @@ async function refreshPanelMessage(client) {
 function buildOrderModal() {
   const modal = new ModalBuilder()
     .setCustomId("ob_order_modal_submit")
-    .setTitle("Order Robux - UNDERCOVER");
+    .setTitle("Order Robux - BLOXBUX");
 
   const username = new TextInputBuilder()
     .setCustomId("roblox_username")
@@ -1110,10 +1110,10 @@ function buildCustomerStatusEmbed(order) {
   ].join("\n");
 
   return new EmbedBuilder()
-    .setTitle(`UNDERCOVER — Ticket ${order.orderId}`)
+    .setTitle(`BLOXBUX — Ticket ${order.orderId}`)
     .setDescription(desc)
     .setColor(0x2ecc71)
-    .setFooter({ text: "UNDERCOVER — Order System" });
+    .setFooter({ text: "BLOXBUX — Order System" });
 }
 
 function buildCustomerButtonsEligible(orderId) {
@@ -1200,7 +1200,7 @@ function buildSeaBankInstructions(order) {
       ].join("\n")
     )
     .setColor(0xffb000)
-    .setFooter({ text: "UNDERCOVER — SeaBank Transfer" });
+    .setFooter({ text: "BLOXBUX — SeaBank Transfer" });
 }
 
 function buildPaymentButtons(orderId) {
@@ -1240,7 +1240,7 @@ function buildStockReadyBroadcastEmbed() {
         "❗ **Buruan order sebelum stok berubah lagi!**",
       ].join("\n")
     )
-    .setFooter({ text: "UNDERCOVER — Realtime Stock Update" })
+    .setFooter({ text: "BLOXBUX — Realtime Stock Update" })
     .setTimestamp();
 }
 
@@ -1258,7 +1258,7 @@ function buildStockOutBroadcastEmbed() {
         `🛒 Nanti kalau sudah ready lagi, langsung order di <#${PANEL_CHANNEL_ID}> ya.`,
       ].join("\n")
     )
-    .setFooter({ text: "UNDERCOVER — Realtime Stock Update" })
+    .setFooter({ text: "BLOXBUX — Realtime Stock Update" })
     .setTimestamp();
 }
 
@@ -1285,7 +1285,7 @@ function buildRedeployStockBroadcastEmbed() {
           : `⚠️ Gagal cek stok Roblox: ${stockCache.error || "Unknown error"}`,
       ].join("\n")
     )
-    .setFooter({ text: "UNDERCOVER — Railway Redeploy Stock Update" })
+    .setFooter({ text: "BLOXBUX — Railway Redeploy Stock Update" })
     .setTimestamp();
 }
 
@@ -1313,7 +1313,7 @@ function buildOrderManualBroadcastEmbed(aksi, staffUser) {
           : "📌 Tombol order dimatikan meskipun payout Roblox ready.",
       ].join("\n")
     )
-    .setFooter({ text: "UNDERCOVER — Manual Order Update" })
+    .setFooter({ text: "BLOXBUX — Manual Order Update" })
     .setTimestamp();
 }
 
@@ -1402,7 +1402,7 @@ function buildTestimoniEmbed(order, customerUser, staffUser) {
       ].join("\n")
     )
     .setThumbnail(customerAvatar)
-    .setFooter({ text: "UNDERCOVER — Testimoni Order" })
+    .setFooter({ text: "BLOXBUX — Testimoni Order" })
     .setTimestamp();
 }
 
@@ -1431,7 +1431,7 @@ async function sendTestimoniMessage(client, order, staffUser) {
       content:
         "@everyone\n✨ **Testimoni order baru berhasil diproses!** ✨" +
         (proofAttachments.length > 0
-          ? "\n📎 Bukti pembayaran QRIS Order Robux - UNDERCOVER."
+          ? "\n📎 Bukti pembayaran QRIS Order Robux - BLOXBUX."
           : ""),
       embeds: [buildTestimoniEmbed(order, customerUser, staffUser)],
       allowedMentions: { parse: ["everyone"] },
@@ -2613,13 +2613,13 @@ console.log(`Logged in as ${client.user.tag}`);
           let ticket;
 
           try {
-            const ticketName = `ucvr-${orderId}`.toLowerCase();
+            const ticketName = `bb-${orderId}`.toLowerCase();
 
             ticket = await guild.channels.create({
               name: ticketName,
               type: ChannelType.GuildText,
               parent: TICKET_CATEGORY_ID,
-              topic: `UNDERCOVER | ${orderId} | User: ${user.id} | Roblox: ${robloxUsernameInput}`,
+              topic: `BLOXBUX | ${orderId} | User: ${user.id} | Roblox: ${robloxUsernameInput}`,
               permissionOverwrites: [
                 {
                   id: guild.id,
