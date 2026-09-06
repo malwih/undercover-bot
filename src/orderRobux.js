@@ -1850,12 +1850,7 @@ function buildPaymentSettingsStatus() {
 }
 
 export function setupOrderRobux(discordClient) {
-client = discordClient;
-loadOrders();
-loadOrderSettings();
-loadPaymentSettings();
-client.once("ready", async () => {
-console.log(`Logged in as ${client.user.tag}`);
+  client = discordClient;
   loadOrders();
   loadOrderSettings();
   loadPaymentSettings();
