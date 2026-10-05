@@ -1753,6 +1753,14 @@ async function maybeBroadcastStockChange(client, refreshResult, options = {}) {
   const currAvailable = Number(current.available || 0);
   const currMode = getStockBroadcastMode(currAvailable);
 
+  // Force broadcast overrides suppressBroadcast
+  if (forceBroadcast) {
+    await sendAutoStockBroadcast(client, currMode);
+    stockBroadcastState.lastObservedAvailable = currAvailable;
+    stockBroadcastState.lastObservedMode = currMode;
+    return;
+  }
+
   if (!stockBroadcastState.initialized || suppressBroadcast) {
     stockBroadcastState.initialized = true;
     stockBroadcastState.lastObservedAvailable = currAvailable;
@@ -1766,12 +1774,6 @@ async function maybeBroadcastStockChange(client, refreshResult, options = {}) {
   let broadcastMode = null;
 
   if (prevMode !== currMode) {
-    shouldBroadcast = true;
-    broadcastMode = currMode;
-  }
-
-  // Force broadcast if requested
-  if (forceBroadcast && !shouldBroadcast) {
     shouldBroadcast = true;
     broadcastMode = currMode;
   }
