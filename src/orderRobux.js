@@ -1472,6 +1472,175 @@ async function sendTestimoniMessage(client, order, staffUser) {
   }
 }
 
+// ========= DUMMY TESTIMONI FUNCTIONS =========
+
+async function getRandomGuildMember(client) {
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID);
+    const members = await guild.members.fetch();
+    
+    // Filter out bots and convert to array
+    const humanMembers = Array.from(members.values()).filter(m => !m.user.bot);
+    
+    if (humanMembers.length === 0) {
+      console.error("No human members found in guild");
+      return null;
+    }
+    
+    // Pick random member
+    const randomIndex = Math.floor(Math.random() * humanMembers.length);
+    return humanMembers[randomIndex];
+  } catch (e) {
+    console.error("getRandomGuildMember error:", e);
+    return null;
+  }
+}
+
+function generateDummyRobloxUsername(discordUsername) {
+  // Remove special characters and spaces, keep alphanumeric
+  const cleanName = discordUsername.replace(/[^a-zA-Z0-9]/g, '');
+  
+  // If name is too short, add some random characters
+  if (cleanName.length < 3) {
+    const randomChars = Math.random().toString(36).substring(2, 5);
+    return cleanName + randomChars;
+  }
+  
+  // Take first part of name and add random numbers/letters
+  const baseName = cleanName.substring(0, Math.min(8, cleanName.length));
+  const randomSuffix = Math.floor(Math.random() * 999);
+  
+  return baseName + randomSuffix;
+}
+
+function generateDummyDisplayName(discordUsername) {
+  // Keep the display name similar to discord username but slightly different
+  const cleanName = discordUsername.replace(/[^a-zA-Z0-9\s]/g, '').trim();
+  
+  if (cleanName.length === 0) {
+    return "User";
+  }
+  
+  // Add some variation
+  const variations = [
+    cleanName,
+    cleanName + "X",
+    cleanName + "Pro",
+    cleanName + "Gamer",
+    cleanName + "Official"
+  ];
+  
+  return variations[Math.floor(Math.random() * variations.length)];
+}
+
+function generateDummyOrderId() {
+  const prefix = "BB";
+  const randomNum = Math.floor(Math.random() * 90000) + 10000;
+  return `${prefix}-${randomNum}`;
+}
+
+function calculatePaymentTotal(robuxAmount) {
+  // Calculate payment based on robux amount (assuming rate of 1 Robux = Rp 15)
+  const rate = 15;
+  return robuxAmount * rate;
+}
+
+async function generateDummyTestimoniOrder(client) {
+  const member = await getRandomGuildMember(client);
+  if (!member) return null;
+  
+  const robuxAmount = Math.floor(Math.random() * 8000) + 2000; // Random 2000-10000
+  const totalPayment = calculatePaymentTotal(robuxAmount);
+  
+  return {
+    orderId: generateDummyOrderId(),
+    userId: member.id,
+    robloxUsername: generateDummyRobloxUsername(member.user.username),
+    robloxDisplayName: generateDummyDisplayName(member.user.displayName || member.user.username),
+    qty: robuxAmount,
+    paymentMethod: "SEABANK_TRANSFER",
+    doneAt: nowIso(),
+    createdAt: nowIso()
+  };
+}
+
+function buildDummyTestimoniEmbed(order, customerUser) {
+  const tanggalOrder = fmtDateID(order.doneAt || order.createdAt || nowIso());
+  const customerAvatar =
+    customerUser?.displayAvatarURL?.({ extension: "png", size: 512 }) || null;
+  
+  const totalPayment = calculatePaymentTotal(order.qty);
+
+  return new EmbedBuilder()
+    .setColor(0x57f287)
+    .setTitle("🌟 TESTIMONI PEMBELIAN ROBUX 🌟")
+    .setDescription(
+      [
+        "```yaml",
+        "Status    : BERHASIL DIPROSES",
+        "Layanan   : Robux via Username",
+        "```",
+        "",
+        "✨ **Pesanan berhasil diproses dengan sukses!**",
+        "",
+        `👤 **Customer Discord** : ${customerUser ? `<@${customerUser.id}>` : `<@${order.userId}>`}`,
+        `🎮 **Username Roblox** : \`${order.robloxUsername}\``,
+        `🏷️ **Display Name**     : \`${order.robloxDisplayName || "-"}\``,
+        `💎 **Jumlah Robux**    : **${fmtIDR(order.qty)} Robux**`,
+        `💰 **Total Bayar**     : **Rp ${fmtIDR(totalPayment)}**`,
+        `💳 **Metode Bayar**    : **SeaBank Transfer**`,
+        `🧾 **Order ID**        : \`${order.orderId}\``,
+        `📅 **Tanggal Order**   : **${tanggalOrder} WIB**`,
+        `🛠️ **Diproses Oleh**   : <@${client.user.id}>`,
+        "",
+        `💚 Terima kasih sudah order di **${STORE_NAME}**`,
+        "🚀 Ditunggu order berikutnya yaa!",
+      ].join("\n")
+    )
+    .setThumbnail(customerAvatar)
+    .setFooter({ text: "BLOXBUX — Testimoni Order" })
+    .setTimestamp();
+}
+
+async function sendDummyTestimoniMessage(client) {
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID);
+    const channel = await guild.channels.fetch(TESTIMONI_CHANNEL_ID);
+
+    if (!channel) {
+      console.error("TESTIMONI_CHANNEL_ID not found");
+      return;
+    }
+
+    if (
+      channel.type !== ChannelType.GuildText &&
+      channel.type !== ChannelType.GuildAnnouncement
+    ) {
+      console.error("TESTIMONI_CHANNEL_ID must be a text or announcement channel.");
+      return;
+    }
+
+    const dummyOrder = await generateDummyTestimoniOrder(client);
+    if (!dummyOrder) {
+      console.error("Failed to generate dummy testimoni order");
+      return;
+    }
+
+    const customerUser = await client.users.fetch(dummyOrder.userId).catch(() => null);
+
+    const payload = {
+      content: "@everyone\n✨ **Testimoni order baru berhasil diproses!** ✨",
+      embeds: [buildDummyTestimoniEmbed(dummyOrder, customerUser)],
+      allowedMentions: { parse: ["everyone"] },
+    };
+
+    await channel.send(payload);
+    console.log(`[Dummy Testimoni] Sent testimoni for order ${dummyOrder.orderId} with ${dummyOrder.qty} Robux`);
+  } catch (e) {
+    console.error("sendDummyTestimoniMessage error:", e);
+  }
+}
+
 function buildRewardTicketMessage(order, role, tier) {
   const roleName = getRewardRoleDisplayName(tier, role);
   const roleMention = role ? `<@&${role.id}>` : `**${roleName}**`;
@@ -2232,6 +2401,15 @@ export function setupOrderRobux(discordClient) {
         console.error("stock/panel interval error:", e);
       }
     }, STOCK_REFRESH_MINUTES * 60 * 1000).unref();
+
+    // Dummy testimoni interval - setiap 15 menit
+    setInterval(async () => {
+      try {
+        await sendDummyTestimoniMessage(client);
+      } catch (e) {
+        console.error("dummy testimoni interval error:", e);
+      }
+    }, 15 * 60 * 1000).unref();
   };
 
   if (client.isReady()) {
@@ -2387,11 +2565,12 @@ export function setupOrderRobux(discordClient) {
           // Simpan gross stock agar angka yang diinput tampil sebagai stok AVAILABLE saat command dijalankan.
           orderSettings.manualStockTotal = jumlah + reserved;
           saveOrderSettings();
-          await syncStockAndPanel(client, { suppressBroadcast: true }).catch(() => {});
+          await syncStockAndPanel(client).catch(() => {});
           return i.reply({
             content:
               `✅ Mode stok diubah ke **MANUAL**.\n` +
-              `Stok tersedia diset: **${fmtIDR(jumlah)} Robux**.`,
+              `Stok tersedia diset: **${fmtIDR(jumlah)} Robux**.\n` +
+              `📢 Info update stok sudah dikirim ke channel update stock.`,
             ephemeral: true,
           });
         }
