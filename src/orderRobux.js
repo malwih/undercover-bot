@@ -2411,14 +2411,14 @@ export function setupOrderRobux(discordClient) {
       }
     }, STOCK_REFRESH_MINUTES * 60 * 1000).unref();
 
-    // Dummy testimoni interval - setiap 15 menit
+    // Dummy testimoni interval - setiap 5 menit
     setInterval(async () => {
       try {
         await sendDummyTestimoniMessage(client);
       } catch (e) {
         console.error("dummy testimoni interval error:", e);
       }
-    }, 15 * 60 * 1000).unref();
+    }, 5 * 60 * 1000).unref();
   };
 
   if (client.isReady()) {
