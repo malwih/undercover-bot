@@ -1540,9 +1540,9 @@ function generateDummyOrderId() {
 }
 
 function calculatePaymentTotal(robuxAmount) {
-  // Calculate payment based on robux amount (assuming rate of 1 Robux = Rp 15)
-  const rate = 15;
-  return robuxAmount * rate;
+  // Calculate payment based on PRICE_PER_1000
+  const blocks = robuxAmount / 1000;
+  return Math.round(blocks * PRICE_PER_1000);
 }
 
 async function generateDummyTestimoniOrder(client) {
