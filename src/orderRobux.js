@@ -1549,7 +1549,8 @@ async function generateDummyTestimoniOrder(client) {
   const member = await getRandomGuildMember(client);
   if (!member) return null;
   
-  const robuxAmount = Math.floor(Math.random() * 8000) + 2000; // Random 2000-10000
+  const multiplier = Math.floor(Math.random() * 9) + 2; // 2-10
+  const robuxAmount = multiplier * 1000; // Kelipatan 1000: 2000, 3000, ..., 10000
   const totalPayment = calculatePaymentTotal(robuxAmount);
   
   return {
