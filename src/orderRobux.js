@@ -81,6 +81,7 @@ let orderSettings = {
   minOrderQty: null,
   stockMode: "AUTO",
   manualStockTotal: null,
+  dummyTestimoniEnabled: true,
 };
 
 let paymentSettings = {
@@ -114,6 +115,7 @@ function loadOrderSettings() {
         Number.isFinite(manualStockTotal) && manualStockTotal >= 0
           ? Math.floor(manualStockTotal)
           : null,
+      dummyTestimoniEnabled: typeof json.dummyTestimoniEnabled === "boolean" ? json.dummyTestimoniEnabled : true,
     };
 
     saveOrderSettings();
@@ -124,6 +126,7 @@ function loadOrderSettings() {
       minOrderQty: null,
       stockMode: "AUTO",
       manualStockTotal: null,
+      dummyTestimoniEnabled: true,
     };
     saveOrderSettings();
   }
@@ -2389,6 +2392,22 @@ export function setupOrderRobux(discordClient) {
             .setMinValue(0)
         )
         .toJSON(),
+
+      new SlashCommandBuilder()
+        .setName("dummy")
+        .setDescription("Staff: hidupkan/matikan testimoni dummy otomatis")
+        .addStringOption((option) =>
+          option
+            .setName("aksi")
+            .setDescription("Pilih aksi")
+            .setRequired(true)
+            .addChoices(
+              { name: "status", value: "STATUS" },
+              { name: "on", value: "ON" },
+              { name: "off", value: "OFF" }
+            )
+        )
+        .toJSON(),
     ]);
 
     // Hapus command lama /tagmap dari versi sebelumnya agar syarat nama/tag UCVR tidak bisa diaktifkan lagi.
@@ -2414,7 +2433,9 @@ export function setupOrderRobux(discordClient) {
     // Dummy testimoni interval - setiap 5 menit
     setInterval(async () => {
       try {
-        await sendDummyTestimoniMessage(client);
+        if (orderSettings.dummyTestimoniEnabled) {
+          await sendDummyTestimoniMessage(client);
+        }
       } catch (e) {
         console.error("dummy testimoni interval error:", e);
       }
@@ -2580,6 +2601,45 @@ export function setupOrderRobux(discordClient) {
               `✅ Mode stok diubah ke **MANUAL**.\n` +
               `Stok tersedia diset: **${fmtIDR(jumlah)} Robux**.\n` +
               `📢 Info update stok sudah dikirim ke channel update stock.`,
+            ephemeral: true,
+          });
+        }
+
+        return i.reply({ content: "Aksi tidak valid.", ephemeral: true });
+      }
+
+      if (i.isChatInputCommand() && i.commandName === "dummy") {
+        const member = await i.guild.members.fetch(i.user.id).catch(() => null);
+        if (!isStaff(member)) {
+          return i.reply({ content: "Khusus staff/owner.", ephemeral: true });
+        }
+
+        const aksi = i.options.getString("aksi", true);
+
+        if (aksi === "STATUS") {
+          return i.reply({
+            content:
+              `🤖 **Status Testimoni Dummy**\n` +
+              `Mode: **${orderSettings.dummyTestimoniEnabled ? "ON" : "OFF"}**\n` +
+              `Interval: **5 menit**`,
+            ephemeral: true,
+          });
+        }
+
+        if (aksi === "ON") {
+          orderSettings.dummyTestimoniEnabled = true;
+          saveOrderSettings();
+          return i.reply({
+            content: "✅ Testimoni dummy otomatis sudah **DIAKTIFKAN**.",
+            ephemeral: true,
+          });
+        }
+
+        if (aksi === "OFF") {
+          orderSettings.dummyTestimoniEnabled = false;
+          saveOrderSettings();
+          return i.reply({
+            content: "✅ Testimoni dummy otomatis sudah **DIMATIKAN**.",
             ephemeral: true,
           });
         }
