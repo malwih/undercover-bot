@@ -1745,7 +1745,7 @@ async function sendAutoStockBroadcast(client, mode) {
 }
 
 async function maybeBroadcastStockChange(client, refreshResult, options = {}) {
-  const { suppressBroadcast = false } = options;
+  const { suppressBroadcast = false, forceBroadcast = false } = options;
   const current = refreshResult?.current;
 
   if (!current?.ok) return;
@@ -1766,6 +1766,12 @@ async function maybeBroadcastStockChange(client, refreshResult, options = {}) {
   let broadcastMode = null;
 
   if (prevMode !== currMode) {
+    shouldBroadcast = true;
+    broadcastMode = currMode;
+  }
+
+  // Force broadcast if requested
+  if (forceBroadcast && !shouldBroadcast) {
     shouldBroadcast = true;
     broadcastMode = currMode;
   }
@@ -2565,7 +2571,7 @@ export function setupOrderRobux(discordClient) {
           // Simpan gross stock agar angka yang diinput tampil sebagai stok AVAILABLE saat command dijalankan.
           orderSettings.manualStockTotal = jumlah + reserved;
           saveOrderSettings();
-          await syncStockAndPanel(client).catch(() => {});
+          await syncStockAndPanel(client, { forceBroadcast: true }).catch(() => {});
           return i.reply({
             content:
               `✅ Mode stok diubah ke **MANUAL**.\n` +
@@ -2947,6 +2953,17 @@ export function setupOrderRobux(discordClient) {
             );
           }
 
+          // Fetch Roblox user info to get display name
+          let robloxDisplayName = "-";
+          try {
+            const robloxUserInfo = await robloxUsernameToUserId(robloxUsernameInput);
+            if (robloxUserInfo?.displayName) {
+              robloxDisplayName = robloxUserInfo.displayName;
+            }
+          } catch (e) {
+            console.error("Failed to fetch Roblox display name:", e);
+          }
+
           const order = {
             orderId,
             guildId: GUILD_ID,
@@ -2954,7 +2971,7 @@ export function setupOrderRobux(discordClient) {
             userId: user.id,
 
             robloxUsername: robloxUsernameInput,
-            robloxDisplayName: "-",
+            robloxDisplayName: robloxDisplayName,
 
             qty,
             stockModeAtCreation: isManualStockMode() ? "MANUAL" : "AUTO",
